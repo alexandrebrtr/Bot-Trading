@@ -19,6 +19,11 @@ dependencies = [
 dev = [
     "pytest>=8",
 ]
+# Dashboard Streamlit en lecture seule : python -m bot_trading dashboard
+dashboard = [
+    "streamlit>=1.50",
+    "plotly>=5.20",
+]
 
 [project.scripts]
 bot-trading = "bot_trading.__main__:main"
