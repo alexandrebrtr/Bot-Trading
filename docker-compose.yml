@@ -1,0 +1,23 @@
+# Paper trading local uniquement. Aucun service ne peut envoyer d'ordre réel.
+services:
+  bot:
+    build: .
+    image: bot-trading:dev
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      BOT_MODE: paper
+    volumes:
+      - ./data:/app/data
+    command: ["status"]
+
+  tests:
+    build: .
+    image: bot-trading:dev
+    entrypoint: ["python", "-m", "pytest"]
+    command: ["-q"]
+    environment:
+      BOT_MODE: paper
+    # pas de .env : les tests n'utilisent aucun identifiant ni réseau
+    network_mode: none
