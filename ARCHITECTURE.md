@@ -9,8 +9,8 @@
 Capital.com (lecture seule, REST + WebSocket) ──► marketdata/ ──► data/store/*.parquet (available_at, lineage)
                                      │  lectures as_of (anti look-ahead)
                                      ▼
-                              analysis/ (structure, FVG, OB)
-                                     │                                   │
+   intelligence/ (macro, entreprises, régime)        analysis/ (structure, FVG, OB)
+                                     │ RegimeAssessment                  │
                                      ▼                                   ▼
                             moteur de décision (fondamental dominant, technique secondaire)   [à venir]
                                      │  OrderRequest
@@ -51,6 +51,14 @@ Il n'existe **aucune flèche** vers un broker réel.
 | `marketdata/sources/edgar.py` | SEC EDGAR : dépôts (10-K/10-Q/8-K) et faits XBRL datés à l'acceptation. | http |
 | `marketdata/sources/cboe.py`, `treasury.py` | VIX quotidien, courbe des taux du Trésor (2 ans, 10 ans, pente). | http |
 | `marketdata/engine.py` | `DataEngine` : ingestion, lectures `as_of`, rapport de santé. | tout marketdata |
+
+| `intelligence/data.py` | Interface `PointInTimeData` (séries par vintage, Fed, calendrier, EDGAR, pondérations) et store en mémoire. | aucune |
+| `intelligence/macro.py` | Macro Intelligence Agent (F1 à F5) : biais, incertitude, scénarios, invalidations, sources. | data, fed, llm |
+| `intelligence/equity.py` | Equity Intelligence Agent (F7) : résultats des grosses pondérations, breadth, secteurs. | data |
+| `intelligence/regime.py` | Market Regime Engine : `RISK_ON` / `NEUTRE` / `RISK_OFF`, autorisation d'entrée, multiplicateur de taille ≤ 1, fenêtres d'annonce. | macro, equity |
+| `intelligence/llm.py`, `guard.py` | LLM optionnel (OpenAI Responses), désactivé par défaut et en backtest ; protection contre l'injection et les fuites de secrets. | pydantic, requests |
+
+Détail : `docs/INTELLIGENCE.md`. Le paquet `intelligence/` n'importe ni `risk`, ni `broker`, ni `core`.
 
 ## Garanties anti look-ahead
 
