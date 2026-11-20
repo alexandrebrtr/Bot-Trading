@@ -33,6 +33,8 @@
 | EXP-11 | Le ton de la Fed (classifieur) ajoute de l'information au-delà des taux 2 ans | Score F4 on/off | Gain hors échantillon | 🧪 |
 | EXP-12 | Écart Dukascopy / Capital.com acceptable | Signaux sur la période commune | ≥ 90 % de signaux identiques | 🏦 |
 
+Exécution : EXP-01, EXP-03, EXP-04, EXP-07 et EXP-08 se lancent désormais sur la stratégie complète (`bot_trading.strategy.DecisionStrategy`) en faisant varier `TechnicalParams` (variante d'entrée, timeframes du setup), `ExitParams` (méthodes de sortie) et `DecisionParams` (risque, TP). `python -m bot_trading backtest --walk-forward` lance déjà la grille EXP-03 (4 variantes d'entrée = 4 essais à compter).
+
 ## Journal des résultats
 
 | ID | Date | Version du code | Essais cumulés | Résultat hors échantillon | Décision |

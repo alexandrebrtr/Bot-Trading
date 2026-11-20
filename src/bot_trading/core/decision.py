@@ -35,6 +35,54 @@ class Decision:
     bias: str = ""  # "bullish" | "neutral" | "bearish" (prévision directionnelle)
     sources: tuple[str, ...] = ()
     meta: dict = field(default_factory=dict)
+    # Champs exigés par la mission (§9, Decision Engine) en plus des précédents.
+    entry_conditions: tuple[str, ...] = ()
+    invalidation_conditions: tuple[str, ...] = ()
+    estimated_risk_eur: float | None = None
+    holding_period: str = ""  # durée de détention envisagée
+
+    # Champs que toute décision du Decision Engine doit renseigner (mission §9).
+    REQUIRED_FIELDS = (
+        "reason",  # justification
+        "bias",  # biais fondamental
+        "setup",  # configuration technique
+        "confidence",  # niveau de confiance
+        "entry_conditions",
+        "invalidation_conditions",
+        "estimated_risk_eur",  # risque estimé
+        "holding_period",
+        "sources",
+    )
+
+    def missing_fields(self) -> list[str]:
+        """Champs de la mission non renseignés (vide = décision complète)."""
+        out = []
+        for name in self.REQUIRED_FIELDS:
+            v = getattr(self, name)
+            if v is None or v == "" or v == ():
+                out.append(name)
+        return out
+
+    def to_dict(self) -> dict:
+        """Forme sérialisable pour le journal de décision (JSON)."""
+        return {
+            "action": self.action.value,
+            "justification": self.reason,
+            "biais_fondamental": self.bias,
+            "regime": self.regime,
+            "configuration_technique": self.setup,
+            "confiance": self.confidence,
+            "conditions_entree": list(self.entry_conditions),
+            "conditions_invalidation": list(self.invalidation_conditions),
+            "risque_estime_eur": self.estimated_risk_eur,
+            "fraction_risque": self.risk_fraction,
+            "taille": self.size,
+            "stop": self.stop_level,
+            "take_profit": self.take_profit_level,
+            "duree_envisagee": self.holding_period,
+            "sources": list(self.sources),
+            "meta": {k: v for k, v in self.meta.items() if isinstance(v, (str, int, float, bool, type(None), list, dict))},
+        }
 
     @classmethod
     def no_trade(cls, reason: str = "", **kw) -> "Decision":

@@ -77,3 +77,35 @@ class IncrementalATR:
             self._value = (self._value * (self.period - 1) + tr) / self.period
         self.values.append(self._value)
         return self._value
+
+
+class IncrementalEMA:
+    """Moyenne mobile exponentielle causale, amorcée par la SMA des ``period`` premières valeurs.
+
+    ``None`` tant que ``period`` valeurs n'ont pas été vues.
+    """
+
+    def __init__(self, period: int) -> None:
+        if period < 1:
+            raise ValueError("period >= 1")
+        self.period = period
+        self.alpha = 2.0 / (period + 1)
+        self.value: float | None = None
+        self._seed: list[float] = []
+        self.count = 0
+
+    def update(self, x: float) -> float | None:
+        self.count += 1
+        if self.value is None:
+            self._seed.append(x)
+            if len(self._seed) == self.period:
+                self.value = sum(self._seed) / self.period
+                self._seed.clear()
+            return self.value
+        self.value = self.alpha * x + (1 - self.alpha) * self.value
+        return self.value
+
+
+def ema(values: Sequence[float], period: int) -> list[float | None]:
+    e = IncrementalEMA(period)
+    return [e.update(v) for v in values]
