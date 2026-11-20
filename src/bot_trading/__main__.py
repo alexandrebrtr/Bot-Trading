@@ -9,7 +9,11 @@ Commandes :
   Decision Engine sur un CSV bid ou sur des données synthétiques, et peut lancer
   un walk-forward ;
 - ``decisions`` : rejoue la stratégie complète et affiche le journal de décision
-  (étage de refus, justification, risque estimé).
+  (étage de refus, justification, risque estimé) ; ``--publish`` l'écrit au
+  format du dashboard ;
+- ``dashboard`` : lance le dashboard Streamlit en lecture seule (``--demo`` pour
+  des données synthétiques) ;
+- ``kill-switch`` : affiche, engage ou lève (confirmation humaine) le kill switch.
 
 Il n'existe aucune commande d'exécution réelle.
 """
@@ -167,8 +171,72 @@ def cmd_decisions(args) -> int:
                 row = {"time": r.time.isoformat(), "outcome": r.outcome, **r.decision.to_dict()}
                 fh.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
         print(f"\nJournal complet : {args.out}")
+    if args.publish:
+        from bot_trading.dashboard.decision_feed import publish_decision
+
+        for r in res.decisions:
+            violations = r.outcome.removeprefix("VETO: ").split(", ") if r.outcome.startswith("VETO") else ()
+            publish_decision(args.publish, r.decision, time=r.time, outcome=r.outcome, violations=violations, timeframe=tf.value)
+        print(f"Décisions publiées pour le dashboard : {args.publish}")
     m = res.metrics()
     print(f"\nTrades {m.trades}, P&L net {m.net_pnl_eur:.2f} €, DD max {m.max_drawdown:.1%}")
+    return 0
+
+
+def cmd_dashboard(args) -> int:
+    import importlib.util
+    import os
+    import subprocess
+    from pathlib import Path
+
+    if importlib.util.find_spec("streamlit") is None or importlib.util.find_spec("plotly") is None:
+        print("Le dashboard demande Streamlit et Plotly : pip install -e \".[dashboard]\"", file=sys.stderr)
+        return 2
+    runtime, store = Path(args.runtime_dir), Path(args.store_dir)
+    env = dict(os.environ)
+    if args.demo:
+        from bot_trading.dashboard.demo import build_demo
+
+        root = build_demo(args.demo_dir)
+        runtime, store = root / "runtime", root / "store"
+        env["BOT_DASHBOARD_DEMO"] = "1"
+        print(f"Données de DÉMO (synthétiques) écrites dans {root}")
+    env["BOT_RUNTIME_DIR"] = str(runtime.resolve())
+    env["BOT_STORE_DIR"] = str(store.resolve())
+    env["BOT_REPO_ROOT"] = str(Path.cwd())
+    app = Path(__file__).resolve().parent / "dashboard" / "app.py"
+    cmd = [
+        sys.executable, "-m", "streamlit", "run", str(app),
+        "--server.address", "127.0.0.1",  # jamais exposé sur le réseau local
+        "--server.port", str(args.port),
+        "--browser.gatherUsageStats", "false",
+        "--server.headless", "true" if args.no_browser else "false",
+    ]
+    print(f"Dashboard : http://127.0.0.1:{args.port}  (Ctrl+C pour arrêter)")
+    try:
+        return subprocess.call(cmd, env=env)
+    except KeyboardInterrupt:
+        return 0
+
+
+def cmd_kill_switch(args, settings: Settings) -> int:
+    from bot_trading.risk.engine import RiskEngine
+    from bot_trading.risk.kill_switch import KillSwitchStore
+
+    store = KillSwitchStore(args.path)
+    engine = RiskEngine(settings.risk, settings.instrument, settings.costs)
+    store.apply(engine)
+    if args.engage:
+        state = store.engage(engine, args.reason or "arrêt manuel (CLI)", actor="cli")
+    elif args.reset:
+        try:
+            state = store.reset(engine, args.confirm or "", actor="cli")
+        except PermissionError as e:
+            print(e, file=sys.stderr)
+            return 1
+    else:
+        state = store.load()
+    print(f"Kill switch : {'ENGAGÉ' if state.engaged else 'inactif'}" + (f" ({state.reason}, {state.changed_at})" if state.changed_at or state.reason else ""))
     return 0
 
 
@@ -195,12 +263,31 @@ def main(argv: list[str] | None = None) -> int:
     dc.add_argument("--risk", type=float, default=0.10)
     dc.add_argument("--last", type=int, default=15)
     dc.add_argument("--out", help="écrit le journal complet en JSONL")
+    dc.add_argument("--publish", help="publie les décisions pour le dashboard (ex. data/runtime/decisions.jsonl)")
+    db = sub.add_parser("dashboard", help="dashboard Streamlit en lecture seule")
+    db.add_argument("--demo", action="store_true", help="données synthétiques (data/demo)")
+    db.add_argument("--demo-dir", default="data/demo")
+    db.add_argument("--runtime-dir", default="data/runtime")
+    db.add_argument("--store-dir", default="data/store")
+    db.add_argument("--port", type=int, default=8501)
+    db.add_argument("--no-browser", action="store_true", help="ne pas ouvrir le navigateur")
+    ks = sub.add_parser("kill-switch", help="état, engagement ou reprise du kill switch")
+    ks.add_argument("--path", default="data/runtime/kill_switch.json")
+    g = ks.add_mutually_exclusive_group()
+    g.add_argument("--engage", action="store_true")
+    g.add_argument("--reset", action="store_true")
+    ks.add_argument("--reason", default="")
+    ks.add_argument("--confirm", default="", help="JE_CONFIRME_LA_REPRISE pour --reset")
     args = parser.parse_args(argv)
     if args.cmd == "backtest":
         return cmd_backtest(args)
     if args.cmd == "decisions":
         return cmd_decisions(args)
+    if args.cmd == "dashboard":
+        return cmd_dashboard(args)
     settings = Settings.from_env()
+    if args.cmd == "kill-switch":
+        return cmd_kill_switch(args, settings)
     if args.cmd == "status":
         return cmd_status(settings)
     return cmd_replay(args.csv)

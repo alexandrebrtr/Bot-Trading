@@ -30,6 +30,7 @@ l'entrée. L'absence d'opportunité conduit à `NO_TRADE`.
 | Technical Engine top-down (D1, H4, H1, M15, M5), filtre d'obstacles, sizing | `bot_trading.strategy.technical`, `obstacles`, `sizing` | ✅ (données synthétiques) |
 | Decision Engine (LONG, HOLD, CLOSE, NO_TRADE) avec pré-contrôle du Risk Engine | `bot_trading.strategy.decision_engine` | ✅ (données synthétiques) |
 | Gestion des positions swing (sorties, remontée du stop garanti) | `bot_trading.strategy.positions` | ✅ (données synthétiques) |
+| Dashboard de suivi en lecture seule (Streamlit) + kill switch persistant | `bot_trading.dashboard`, `bot_trading.risk.kill_switch` | ✅ |
 | Boucles d'amélioration | — | à venir |
 
 ## Démarrage rapide
@@ -55,6 +56,47 @@ python -m bot_trading.marketdata health
 Les données sont écrites dans `data/store/` (ignoré par git), une table Parquet
 par jeu de données et par année, plus `data/store/_lineage.jsonl` qui trace
 chaque collecte (source, URL sans clé, heure, empreinte SHA-256, licence).
+
+## Dashboard de suivi
+
+Sur le Mac, depuis le dossier du dépôt, **une seule commande** :
+
+```bash
+./scripts/dashboard.sh --demo    # données synthétiques, pour découvrir l'interface
+./scripts/dashboard.sh           # vos données : data/runtime et data/store
+```
+
+Le script crée `.venv` au premier lancement (Python 3.11 ou plus, sinon
+`brew install python@3.12`), installe les dépendances, puis ouvre
+http://127.0.0.1:8501. Le serveur n'écoute que sur la machine locale. Ctrl+C
+pour arrêter. Équivalent dans un environnement déjà installé :
+`pip install -e ".[dashboard]"` puis `python -m bot_trading dashboard [--demo]`.
+
+Six onglets : **Portfolio** (equity, drawdown, distance au plancher de 50 %,
+marge, positions), **Market Intelligence** (régime, biais, scores, scénarios,
+invalidations, événements, VIX et taux), **Technical Analysis** (bougies
+D1/H4/H1/M15/M5 avec les FVG, order blocks et BOS calculés par les moteurs du
+dépôt), **Trading Activity** (décisions, NO_TRADE, vetos, trades),
+**Self-improvement** (essais et propositions en attente de revue) et
+**System Health** (battements des composants, fraîcheur des données, garde-fous).
+Une donnée absente affiche un message qui dit quel fichier ou quelle commande
+la produit.
+
+Le dashboard est **en lecture seule** : aucun bouton n'envoie, ne ferme ni ne
+modifie d'ordre. Le seul bouton actif est le **kill switch** (barre latérale,
+case de confirmation obligatoire) : il passe par `RiskEngine.engage_kill_switch`
+et persiste l'état dans `data/runtime/kill_switch.json`, ce qui fait opposer un
+veto `KILL_SWITCH` à tout nouvel ordre. La reprise exige une confirmation
+humaine en ligne de commande :
+
+```bash
+python -m bot_trading kill-switch                       # état
+python -m bot_trading kill-switch --reset --confirm JE_CONFIRME_LA_REPRISE
+```
+
+Les fichiers lus (`account.json`, `decisions.jsonl`, `regime.json`…) sont
+décrits dans `src/bot_trading/dashboard/runtime.py`. Le moteur de décision
+publie avec `bot_trading.dashboard.decision_feed.publish_decision`.
 
 Avec Docker :
 

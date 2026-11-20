@@ -76,7 +76,39 @@ Il n'existe **aucune flèche** vers un broker réel.
 | `intelligence/regime.py` | Market Regime Engine : `RISK_ON` / `NEUTRE` / `RISK_OFF`, autorisation d'entrée, multiplicateur de taille ≤ 1, fenêtres d'annonce. | macro, equity |
 | `intelligence/llm.py`, `guard.py` | LLM optionnel (OpenAI Responses), désactivé par défaut et en backtest ; protection contre l'injection et les fuites de secrets. | pydantic, requests |
 
+| `risk/kill_switch.py` | Kill switch persistant (`data/runtime/kill_switch.json`) : engagé via `RiskEngine.engage_kill_switch`, rechargé par `apply(engine)`, reprise sur confirmation humaine ; fichier illisible = engagé. | risk |
+| `dashboard/runtime.py` | Lecture tolérante de l'état d'exécution (`data/runtime/*.json[l]`) et helpers d'écriture atomique pour les producteurs. | aucune |
+| `dashboard/decision_feed.py` | Interface `DecisionFeed` consommée par le dashboard ; `publish_decision` pour le moteur de décision. | core |
+| `dashboard/views.py`, `charts.py`, `market.py` | Calculs d'affichage, zones FVG/OB/BOS pour les graphiques, lecture du store Parquet `as_of`. | analysis, marketdata, backtest.metrics |
+| `dashboard/app.py` | Application Streamlit en lecture seule (6 onglets + kill switch). | streamlit, plotly (extra `dashboard`) |
+| `dashboard/demo.py` | Jeu de démonstration synthétique (`--demo`). | backtest, marketdata |
+
 Détail : `docs/INTELLIGENCE.md`. Le paquet `intelligence/` n'importe ni `risk`, ni `broker`, ni `core`.
+
+## Dashboard (`bot_trading.dashboard`)
+
+```
+boucle paper / moteur de décision / régime / amélioration
+        │  write_json, append_jsonl, publish_decision
+        ▼
+data/runtime/*.json[l] ──► RuntimeReader ──┐
+data/store/*.parquet   ──► market (as_of) ─┼──► app.py (Streamlit, 127.0.0.1)
+                                           │        │ bouton kill switch
+                                           │        ▼
+                                           └── KillSwitchStore.engage(RiskEngine)
+```
+
+- **Lecture seule.** Le paquet n'importe ni le broker simulé, ni le client
+  Capital.com, ni aucune bibliothèque réseau (test AST `test_dashboard_cannot_send_orders_or_use_network`).
+- **Kill switch.** Le Risk Engine reste sans I/O ; `risk/kill_switch.py`
+  persiste son état. Toute boucle qui appelle `check_order` doit d'abord
+  appeler `KillSwitchStore.apply(engine)` (la boucle de paper trading n'existe
+  pas encore : c'est le contrat qu'elle devra respecter).
+- **Graphiques causaux.** Les zones viennent de `FVGEngine` / `OrderBlockEngine`
+  rejoués bougie par bougie ; une zone est datée de sa confirmation ; les
+  timeframes agrégés n'émettent que des bougies closes à l'instant d'affichage.
+- **États vides.** Fichier absent = message explicatif ; fichier ou ligne
+  corrompu = ignoré et signalé dans System Health, jamais d'exception.
 
 ## Garanties anti look-ahead
 

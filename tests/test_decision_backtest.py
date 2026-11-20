@@ -136,3 +136,16 @@ def test_margin_cap_in_backtester_sizing():
     assert capped.trades
     m = contract.margin_eur(capped.trades[0].trade.size, capped.trades[0].trade.entry_price, SETTINGS.instrument, SETTINGS.default_eurusd, 20)
     assert m <= 10.0 + 1e-9
+
+
+def test_cli_publishes_decisions_for_dashboard(tmp_path):
+    from bot_trading.__main__ import main
+    from bot_trading.dashboard.decision_feed import JsonlDecisionFeed
+    from bot_trading.dashboard.runtime import RuntimeReader
+
+    out = tmp_path / "decisions.jsonl"
+    assert main(["decisions", "--years", "1", "--seed", "6", "--last", "1", "--publish", str(out)]) == 0
+    feed = JsonlDecisionFeed(RuntimeReader(tmp_path))
+    views = feed.latest(limit=0)
+    assert views and {v.action for v in views} >= {"NO_TRADE"}
+    assert not feed.reader.warnings
