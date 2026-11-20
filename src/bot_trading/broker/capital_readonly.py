@@ -68,6 +68,14 @@ ALLOWED_ENDPOINTS: tuple[tuple[str, re.Pattern[str]], ...] = (
 # Double barrière : ces fragments sont refusés quelle que soit la liste blanche.
 FORBIDDEN_FRAGMENTS = ("positions", "workingorders", "confirms", "accounts", "topup", "history", "watchlists")
 
+# WebSocket temps réel (doc officielle, section Streaming API). Le flux ne sert qu'à
+# recevoir des prix : seules ces destinations peuvent être envoyées
+# (vérifié par ``marketdata.sources.capital_stream``).
+STREAMING_URL = "wss://api-streaming-capital.backend-capital.com/connect"
+ALLOWED_STREAM_DESTINATIONS = frozenset(
+    {"marketData.subscribe", "marketData.unsubscribe", "OHLCMarketData.subscribe", "OHLCMarketData.unsubscribe", "ping"}
+)
+
 RESOLUTIONS = ("MINUTE", "MINUTE_5", "MINUTE_15", "MINUTE_30", "HOUR", "HOUR_4", "DAY", "WEEK")
 MAX_CANDLES_PER_REQUEST = 1000
 
@@ -265,6 +273,12 @@ class CapitalReadOnlyClient:
         if self._cst:
             self._request("DELETE", "/api/v1/session")
         self._cst = self._security_token = None
+
+    def session_tokens(self) -> tuple[str, str]:
+        """Jetons ``CST`` / ``X-SECURITY-TOKEN`` pour le WebSocket (connexion si besoin)."""
+        if self._cst is None:
+            self.login()
+        return self._cst, self._security_token  # type: ignore[return-value]
 
     def ping(self) -> dict:
         return self._request("GET", "/api/v1/ping").json()

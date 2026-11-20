@@ -244,6 +244,16 @@ Doc : https://www.sec.gov/search-filings/edgar-application-programming-interface
 - [ ] Guide de l'API BEA (https://apps.bea.gov/API/docs/index.htm) : quotas.
 - [ ] Finnhub et Alpha Vantage : ce qui est réellement gratuit (calendrier, news).
 
+## 9 bis. Implémentation (Data Engine)
+
+Connecteurs dans `src/bot_trading/marketdata/sources/`, testés avec des réponses
+simulées. **Aucun n'a encore été exécuté contre la vraie API** : les points ⚠️
+ci-dessus restent à vérifier au premier `python -m bot_trading.marketdata refresh`.
+Hypothèses codées et paramétrables : symbole Dukascopy `USA500IDXUSD` et diviseur
+de prix 1000 ; heures de publication FRED (`RELEASE_TIMES_ET`) ; VIX et Trésor
+disponibles à 18:00 New York ; `acceptanceDateTime` EDGAR lu en heure de New York ;
+noms des champs du WebSocket Capital.com ; heures de cotation US500 (modèle CME).
+
 ## 10. Règles d'usage pour le projet
 
 - Aucune clé ni identifiant dans le dépôt : variables d'environnement ou fichier `.env` ignoré par git.
