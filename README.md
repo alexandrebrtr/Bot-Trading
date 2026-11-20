@@ -24,7 +24,9 @@ l'entrée. L'absence d'opportunité conduit à `NO_TRADE`.
 | Order Block Engine | `bot_trading.analysis.order_blocks` | ✅ |
 | Agrégation multi-timeframe sans look-ahead | `bot_trading.marketdata.candles` | ✅ |
 | Ingestion macro / Fed / intermarchés | — | à venir (voir `DATA_SOURCES.md`) |
-| Moteur de décision, backtest, boucles d'amélioration | — | à venir |
+| Interfaces de sources de données (prix, séries point-in-time) | `bot_trading.marketdata.source` | ✅ |
+| Backtester événementiel, benchmarks, métriques, walk-forward, stress tests | `bot_trading.backtest` | ✅ (validé sur données synthétiques, pas encore sur données réelles) |
+| Moteur de décision, boucles d'amélioration | — | à venir |
 
 ## Démarrage rapide
 
@@ -34,6 +36,8 @@ pip install -e ".[dev]"
 python -m pytest            # aucun réseau, aucun identifiant
 python -m bot_trading status
 python -m bot_trading replay chemin/vers/bougies_m5.csv
+python -m bot_trading backtest --years 4 --walk-forward   # données SYNTHÉTIQUES
+python -m bot_trading backtest --csv bougies_h1_bid.csv --timeframe H1
 ```
 
 Avec Docker :
@@ -55,7 +59,7 @@ marge engagée » limite la distance du stop garanti à environ 2,5 % du prix
 
 ## Documentation
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) : modules, flux de données, garanties anti look-ahead.
+- [ARCHITECTURE.md](ARCHITECTURE.md) : modules, flux de données, garanties anti look-ahead, backtester.
 - [AGENTS.md](AGENTS.md) : règles pour les agents (humains ou IA) qui modifient le code.
 - [SECURITY.md](SECURITY.md) : garde-fous contre les ordres réels et gestion des secrets.
 - `DATA_SOURCES.md`, `STRATEGY.md`, `RISK_POLICY.md`, `ROADMAP.md`, `EXPERIMENTS.md` : rédigés dans une branche dédiée.
