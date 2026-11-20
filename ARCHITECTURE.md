@@ -3,9 +3,13 @@
 ## Vue d'ensemble
 
 ```
-            données gratuites (FRED/ALFRED, Fed RSS, Cboe, Trésor, EDGAR…)   [à venir]
-                                     │
-Capital.com (lecture seule) ──► marketdata/ (bougies bid/ask, M5→D1) ──► analysis/ (structure, FVG, OB)
+   données gratuites (FRED/ALFRED, Fed RSS, Cboe, Trésor, EDGAR, Dukascopy)
+                                     │  marketdata/sources/ (GET seul, hôtes en liste blanche)
+                                     ▼
+Capital.com (lecture seule, REST + WebSocket) ──► marketdata/ ──► data/store/*.parquet (available_at, lineage)
+                                     │  lectures as_of (anti look-ahead)
+                                     ▼
+                              analysis/ (structure, FVG, OB)
                                      │                                   │
                                      ▼                                   ▼
                             moteur de décision (fondamental dominant, technique secondaire)   [à venir]
@@ -35,6 +39,18 @@ Il n'existe **aucune flèche** vers un broker réel.
 | `analysis/fvg.py` | Détection et qualification des FVG. | indicators, structure, zones |
 | `analysis/order_blocks.py` | Détection et qualification des order blocks. | indicators, structure, zones |
 | `marketdata/candles.py` | CSV, agrégation M5 → M15/H1/H4/D1 sans bougie incomplète. | core |
+| `marketdata/common.py` | UTC / New York, `Provenance` (traçabilité, URL sans clé), nettoyage des textes externes, `.env`. | aucune |
+| `marketdata/storage.py` | `ParquetStore` : partition par année, écriture atomique, dédoublonnage, lecture `as_of`, `_lineage.jsonl`. | pyarrow |
+| `marketdata/quality.py` | Fraîcheur (FRESH/STALE/MISSING), trous en séance vs fermeture, doublons, OHLC incohérents. | core |
+| `marketdata/http.py` | Client GET-only des sources publiques : hôtes en liste blanche, limiteur, reprises 429/5xx, erreurs sans secret. | requests |
+| `marketdata/sources/capital.py` | Historique Capital.com paginé (via le client lecture seule), bougies closes uniquement. | broker/capital_readonly |
+| `marketdata/sources/capital_stream.py` | WebSocket Capital.com : bougies et cotations, destinations en liste blanche, émission à la clôture. | websocket-client |
+| `marketdata/sources/dukascopy.py` | Minutes bid/ask (bi5) agrégées en M5→D1 pour le backtest long. | candles |
+| `marketdata/sources/fred.py` | FRED/ALFRED : toutes les vintages, heure de publication, `PointInTimeSeries`, calendrier des publications. | http |
+| `marketdata/sources/fed_rss.py` | RSS Fed (FOMC, discours, témoignages), archivage, textes marqués non fiables. | http |
+| `marketdata/sources/edgar.py` | SEC EDGAR : dépôts (10-K/10-Q/8-K) et faits XBRL datés à l'acceptation. | http |
+| `marketdata/sources/cboe.py`, `treasury.py` | VIX quotidien, courbe des taux du Trésor (2 ans, 10 ans, pente). | http |
+| `marketdata/engine.py` | `DataEngine` : ingestion, lectures `as_of`, rapport de santé. | tout marketdata |
 
 ## Garanties anti look-ahead
 
@@ -51,7 +67,12 @@ Il n'existe **aucune flèche** vers un broker réel.
    utilisent l'ATR connu à `confirmed_index`.
 5. **Multi-timeframe.** `resample` n'émet pas la bougie en cours tant qu'elle n'est
    pas close.
-6. **Tests de préfixe.** `tests/test_fvg.py` et `tests/test_structure_and_ob.py`
+6. **Données externes datées.** Chaque ligne stockée porte `available_at`
+   (premier instant où elle était connaissable) ; `ParquetStore.read(as_of=t)`
+   ne renvoie que `available_at <= t`. Heures inconnues = choix prudent
+   (fin de journée à New York). Les vintages ALFRED donnent la valeur telle
+   que publiée puis révisée (`PointInTimeSeries.as_of`).
+7. **Tests de préfixe.** `tests/test_fvg.py` et `tests/test_structure_and_ob.py`
    vérifient que les détections confirmées à l'indice *i* sont identiques quand la
    série s'arrête à *i* et quand elle continue, et qu'un futur différent ne change
    pas le passé.

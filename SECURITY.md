@@ -15,6 +15,9 @@ d'erreur de programmation ou d'agent mal orienté.
 | Client | `CapitalReadOnlyClient` n'a aucune méthode d'ordre, de position, de confirmation ou de changement de compte. | `test_client_has_no_trading_methods` |
 | Transport | `ReadOnlyGuardAdapter` est le **seul** adaptateur monté sur la session HTTP. Il vérifie méthode + chemin exact contre une liste blanche **avant** tout envoi, refuse les fragments `positions`, `workingorders`, `confirms`, `accounts`, `history`, `watchlists`, `topup`, impose HTTPS et les hôtes Capital.com connus, et désactive les redirections. | `test_direct_http_order_never_reaches_network`, `test_forbidden_requests` |
 | Code source | Seul `capital_readonly.py` connaît les hôtes Capital.com ; aucun fichier ne contient d'appel HTTP vers un endpoint d'ordre. | `test_only_readonly_module_knows_capital_hosts`, `test_no_order_endpoint_called_in_source` |
+| Flux temps réel | `CapitalStream` n'envoie que `marketData.*`, `OHLCMarketData.*` et `ping` (`ALLOWED_STREAM_DESTINATIONS`), sur la seule URL `STREAMING_URL`. | `test_stream_refuses_other_destinations` |
+| Sources publiques | `PublicSourceClient` : `GET` seul, HTTPS, hôtes déclarés par source ; la clé FRED n'apparaît ni dans les URL stockées, ni dans la traçabilité, ni dans les erreurs. | `tests/test_data_sources.py`, `test_secrets_never_stored` |
+| Contenu externe | Titres RSS, noms de dépôts SEC : nettoyés et marqués `untrusted_external`. Ce sont des données, jamais des instructions pour les agents. | `test_fed_rss_parse_marks_untrusted` |
 | Exécution | Le seul broker est `SimulatedBroker`, sans dépendance réseau, et il passe chaque ordre par le Risk Engine. | `tests/test_simulated_broker.py` |
 | Docker | Le service `tests` tourne avec `network_mode: none` et sans `.env`. | `docker-compose.yml` |
 
