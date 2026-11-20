@@ -68,7 +68,8 @@ Règles (toutes évaluées, toutes listées en cas de veto) :
 | Short demandé alors que désactivé | `SHORT_DISABLED` |
 | Mauvais epic | `WRONG_EPIC` |
 | Stop absent / non garanti / du mauvais côté / trop proche | `NO_STOP`, `STOP_NOT_GUARANTEED`, `STOP_WRONG_SIDE`, `STOP_TOO_CLOSE` |
-| Perte au stop (+ prime) > 50 % de la marge engagée | `MAX_LOSS_EXCEEDED` |
+| Perte au stop (+ prime) > 50 % de la marge engagée (plafond absolu) | `MAX_LOSS_EXCEEDED` |
+| Perte au stop (+ prime) > 20 % de l'equity (risque max par trade) | `MAX_RISK_PER_TRADE_EXCEEDED` |
 | Take profit du mauvais côté | `TAKE_PROFIT_WRONG_SIDE` |
 | Taille < 0,01 ou hors pas | `INVALID_SIZE` |
 | Exposition cumulée > 1 lot | `EXPOSURE_EXCEEDED` |

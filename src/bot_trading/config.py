@@ -63,6 +63,9 @@ class RiskLimits:
     max_total_exposure_lots: float = 1.0
     # Perte maximale par position : fraction de la marge engagée.
     max_loss_fraction_of_margin: float = 0.5
+    # Risque maximal par trade : fraction de l'equity (perte au stop, prime incluse).
+    # Ne peut que resserrer la règle de la marge, jamais l'élargir.
+    max_risk_fraction_of_equity: float = 0.2
     # Drawdown maximal du compte, mesuré depuis le plus haut de l'equity.
     max_account_drawdown: float = 0.5
     allow_shorts: bool = False

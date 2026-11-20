@@ -144,3 +144,48 @@ def test_all_violations_reported_and_deterministic():
     d2 = e2.check_order(bad, account(), market(ask=6805))
     assert d1 == d2
     assert len(d1.violations) >= 4
+
+
+# ------------------------------------------------ risque max 20 % de l'equity
+def test_equity_rule_binds_at_larger_size():
+    e = engine()
+    # 0,03 lot : marge ≈ 10,2 €, 50 % = 5,1 € ; 20 % de 20 € = 4 €
+    ko = e.check_order(order(size=0.03, stop=6800.6 - 150), account(), market())
+    assert ko.violations == (Violation.MAX_RISK_PER_TRADE_EXCEEDED,)
+    assert ko.details["max_loss_allowed_eur"] == pytest.approx(4.0)
+    ok = e.check_order(order(size=0.03, stop=6800.6 - 130), account(), market())
+    assert ok.approved, ok.explain()
+
+
+def test_margin_rule_binds_at_min_size():
+    d = engine().check_order(order(stop=6800.6 - 171), account(), market())
+    assert d.violations == (Violation.MAX_LOSS_EXCEEDED,)
+    assert d.details["max_loss_allowed_eur"] == pytest.approx(1.70015)
+
+
+def test_equity_rule_binds_when_equity_is_small():
+    e = engine(initial_capital_eur=8.0)
+    # 20 % de 8 € = 1,6 € < 50 % de la marge (1,70 €)
+    d = e.check_order(order(stop=6800.6 - 165), account(equity=8.0, peak=8.0), market())
+    assert d.violations == (Violation.MAX_RISK_PER_TRADE_EXCEEDED,)
+    assert e.check_order(order(stop=6800.6 - 155), account(equity=8.0, peak=8.0), market()).approved
+
+
+def test_equity_rule_cannot_loosen_margin_rule():
+    e = engine(max_risk_fraction_of_equity=1.0)
+    d = e.check_order(order(stop=6800.6 - 171), account(equity=1000, peak=1000), market())
+    assert Violation.MAX_LOSS_EXCEEDED in d.violations
+
+
+def test_max_loss_allowed_is_min_of_both_rules():
+    e = engine()
+    assert e.max_loss_allowed_eur(margin_eur=3.4, equity_eur=20) == pytest.approx(1.7)
+    assert e.max_loss_allowed_eur(margin_eur=10.2, equity_eur=20) == pytest.approx(4.0)
+    assert e.max_loss_allowed_eur(margin_eur=10.2, equity_eur=-5) == 0.0
+
+
+def test_max_stop_distance_combined():
+    e = engine()
+    assert e.max_stop_distance(6800.6) == pytest.approx(170.015)
+    assert e.max_stop_distance(6800.6, size=0.01, equity_eur=20) == pytest.approx(170.015)
+    assert e.max_stop_distance(6800.6, size=0.03, equity_eur=20) == pytest.approx(4.0 / 0.03)
