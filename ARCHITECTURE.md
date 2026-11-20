@@ -5,7 +5,7 @@
 ```
             données gratuites (FRED/ALFRED, Fed RSS, Cboe, Trésor, EDGAR…)   [à venir]
                                      │
-Capital.com (lecture seule) ──► data/ (bougies bid/ask, M5→D1) ──► analysis/ (structure, FVG, OB)
+Capital.com (lecture seule) ──► marketdata/ (bougies bid/ask, M5→D1) ──► analysis/ (structure, FVG, OB)
                                      │                                   │
                                      ▼                                   ▼
                             moteur de décision (fondamental dominant, technique secondaire)   [à venir]
@@ -34,7 +34,7 @@ Il n'existe **aucune flèche** vers un broker réel.
 | `analysis/zones.py` | Suivi de mitigation, retests et invalidation d'une zone. | core |
 | `analysis/fvg.py` | Détection et qualification des FVG. | indicators, structure, zones |
 | `analysis/order_blocks.py` | Détection et qualification des order blocks. | indicators, structure, zones |
-| `data/candles.py` | CSV, agrégation M5 → M15/H1/H4/D1 sans bougie incomplète. | core |
+| `marketdata/candles.py` | CSV, agrégation M5 → M15/H1/H4/D1 sans bougie incomplète. | core |
 
 ## Garanties anti look-ahead
 

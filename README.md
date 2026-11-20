@@ -22,7 +22,7 @@ l'entrée. L'absence d'opportunité conduit à `NO_TRADE`.
 | Structure de marché (swings, BOS) | `bot_trading.analysis.structure` | ✅ |
 | Fair Value Gap Engine | `bot_trading.analysis.fvg` | ✅ |
 | Order Block Engine | `bot_trading.analysis.order_blocks` | ✅ |
-| Agrégation multi-timeframe sans look-ahead | `bot_trading.data.candles` | ✅ |
+| Agrégation multi-timeframe sans look-ahead | `bot_trading.marketdata.candles` | ✅ |
 | Ingestion macro / Fed / intermarchés | — | à venir (voir `DATA_SOURCES.md`) |
 | Moteur de décision, backtest, boucles d'amélioration | — | à venir |
 

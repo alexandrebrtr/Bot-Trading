@@ -17,7 +17,7 @@ from bot_trading.analysis.fvg import FVGEngine
 from bot_trading.analysis.order_blocks import OrderBlockEngine
 from bot_trading.broker.capital_readonly import ALLOWED_ENDPOINTS
 from bot_trading.config import Settings
-from bot_trading.data.candles import load_csv
+from bot_trading.marketdata.candles import load_csv
 
 
 def cmd_status(settings: Settings) -> int:

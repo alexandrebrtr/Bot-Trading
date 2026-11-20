@@ -1,5 +1,5 @@
 from bot_trading.core.models import Timeframe
-from bot_trading.data.candles import load_csv, resample, write_csv
+from bot_trading.marketdata.candles import load_csv, resample, write_csv
 
 from conftest import random_walk
 
