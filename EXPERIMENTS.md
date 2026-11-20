@@ -27,7 +27,7 @@
 | EXP-05 | Seuils de qualification FVG | Taille / ATR (G4), âge (G5), score G3 | Plateau de performance (pas un pic isolé) | 🎛️ |
 | EXP-06 | Définition des Order Blocks | Mèche vs corps, impulsion d × ATR, retests r | Idem | 🎛️ |
 | EXP-07 | Gestion de sortie | TP à la résistance vs stop suiveur vs sortie partielle ; break-even a ; sortie temporelle N | Espérance nette après financement | 🎛️ |
-| EXP-08 | Distance de stop vs risque/trade | Invalidation H1 vs H4, plafonnée à 2,5 % ; risque 2–8 % | Calmar maximal avec DD < 35 % | 🎛️ |
+| EXP-08 | Distance de stop vs risque/trade | Invalidation H1 vs H4, plafonnée à 2,5 % ; risque 2–20 % (après R8) | Calmar maximal avec DD < 35 % | 🎛️ |
 | EXP-09 | Les heures d'entrée du journal (10–13 h, 15–16 h, heure de Paris) sont meilleures | Filtre horaire on/off | Gain significatif hors échantillon (sinon abandonné) | 🧪 (journal, n faible) |
 | EXP-10 | Le profil du journal (TP ~15 pts, stop lointain) est perdant une fois le stop garanti à 2,5 % imposé | Réplique du style manuel | Confirmer ou infirmer l'analyse de JOURNAL_ANALYSIS §4 | 🧪 |
 | EXP-11 | Le ton de la Fed (classifieur) ajoute de l'information au-delà des taux 2 ans | Score F4 on/off | Gain hors échantillon | 🧪 |

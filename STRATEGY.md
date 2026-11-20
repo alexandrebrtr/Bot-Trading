@@ -149,7 +149,6 @@ Variantes d'entrée à tester (voir `EXPERIMENTS.md`) : retour dans le FVG, miti
 |---|---|---|
 | Q1 | Rôle du fondamental : filtre seul ou filtre + taille ? | Filtre + taille |
 | Q2 | Que faire d'une position ouverte quand le régime devient `RISK_OFF` ? | Stop au break-even, pas de sortie forcée |
-| Q3 | Les trades `Live` antérieurs au 20/07 sont-ils aussi chez Capital.com ? | Oui, à confirmer |
 | Q4 | Accepter que le bot trade nettement moins souvent que le journal (quelques trades par mois) ? | Oui, conséquence de S3 et E4 |
 
-Décidé : pas de compte démo possible chez Capital.com (confirmé par Alexandre), le paper trading est local.
+Décidé : pas de compte démo possible chez Capital.com (confirmé par Alexandre), le paper trading est local. Tous les trades `Live` du journal sont chez Capital.com (confirmé par Alexandre).
