@@ -142,6 +142,24 @@ class SimulatedBroker:
         self.positions[position.deal_id] = position
         return OrderResult(True, decision, position, "FILLED")
 
+    def modify_stop(self, deal_id: str, new_stop: float) -> bool:
+        """Remonte le stop garanti d'une position longue (jamais l'éloigner, jamais le retirer).
+
+        Refusé (``False``) si le nouveau stop n'est pas plus serré que l'actuel,
+        ou s'il n'est pas sous le bid courant (le stop serait déclenché à la pose).
+        """
+        p = self.positions.get(deal_id)
+        if p is None or self.last_quote is None:
+            return False
+        if p.direction != Direction.BUY:
+            raise RuntimeError("Position courte inattendue")
+        if new_stop <= p.stop_level or new_stop >= self.last_quote.bid:
+            return False
+        if p.guaranteed_stop and self.last_quote.bid - new_stop < self.spec.min_guaranteed_stop_distance:
+            return False
+        p.stop_level = new_stop
+        return True
+
     def close_position(self, deal_id: str, reason: str = "MANUAL", price: float | None = None, when: datetime | None = None) -> ClosedTrade:
         if self.last_quote is None and price is None:
             raise RuntimeError("Aucune cotation pour clôturer")

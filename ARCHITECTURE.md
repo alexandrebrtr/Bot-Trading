@@ -51,6 +51,14 @@ Il n'existe **aucune flèche** vers un broker réel.
 | `marketdata/sources/edgar.py` | SEC EDGAR : dépôts (10-K/10-Q/8-K) et faits XBRL datés à l'acceptation. | http |
 | `marketdata/sources/cboe.py`, `treasury.py` | VIX quotidien, courbe des taux du Trésor (2 ans, 10 ans, pente). | http |
 | `marketdata/engine.py` | `DataEngine` : ingestion, lectures `as_of`, rapport de santé. | tout marketdata |
+| `marketdata/source.py` | Interfaces `PriceSource` (bougies bid + spread) et `PointInTimeSource` (séries datées par leur disponibilité), implémentations mémoire et CSV. | core |
+| `marketdata/synthetic.py` | Bougies synthétiques déterministes (régimes, séances, gaps) pour tests et démo. | core |
+| `core/decision.py` | `Decision` : LONG / HOLD / CLOSE / NO_TRADE, invalidation, risque, setup, biais. | aucune |
+| `backtest/engine.py` | Backtester événementiel chronologique. Réutilise `SimulatedBroker` et `RiskEngine`. | broker, risk, marketdata |
+| `backtest/strategies.py` | Benchmarks (buy & hold, trend following, technique FVG, fondamentale seule, complète, aléatoire). | analysis, backtest |
+| `backtest/metrics.py` | Métriques de la mission, Sharpe probabiliste et déflaté, risque de ruine. | backtest |
+| `backtest/validation.py` | Walk-forward, réserve finale à ouverture unique, stress tests, tableau comparatif. | backtest |
+| `backtest/lookahead.py` | Tests de préfixe et de futur alternatif applicables à toute stratégie. | backtest |
 
 | `intelligence/data.py` | Interface `PointInTimeData` (séries par vintage, Fed, calendrier, EDGAR, pondérations) et store en mémoire. | aucune |
 | `intelligence/macro.py` | Macro Intelligence Agent (F1 à F5) : biais, incertitude, scénarios, invalidations, sources. | data, fed, llm |
@@ -84,6 +92,83 @@ Détail : `docs/INTELLIGENCE.md`. Le paquet `intelligence/` n'importe ni `risk`,
    vérifient que les détections confirmées à l'indice *i* sont identiques quand la
    série s'arrête à *i* et quand elle continue, et qu'un futur différent ne change
    pas le passé.
+
+## Backtester (`bot_trading.backtest`)
+
+### Boucle d'événements
+
+Pour chaque bougie bid `i` du timeframe de base :
+
+1. **Ouverture** : cotation `open / open + spread` envoyée au broker simulé ; un
+   gap sous un stop garanti sort **au niveau du stop** (prime facturée).
+2. **Ordres en attente** (décidés à la clôture de `i-1`) exécutés au prix
+   d'ouverture de `i`, jamais au prix de clôture qui a servi à décider.
+   Taille = plancher(risque autorisé / (distance + prime) × valeur du point) au pas
+   de 0,01 (R15) ; stop trop proche → distance minimale (R10) ; taille < 0,01 →
+   `SIZE_BELOW_MIN`, jamais de stop rapproché (R11). Puis Risk Engine (veto).
+3. **Vie de la bougie** : `SimulatedBroker.on_bar` (stop/TP intra-bougie, stop
+   d'abord si les deux sont touchés, financement à 22:00 UTC, triple le vendredi,
+   stop-out de marge, verrou de drawdown).
+4. **Clôture** : equity marquée ; la stratégie reçoit un `BarContext` (bougies
+   `0..i`, timeframes supérieurs **clos**, séries point-in-time à l'heure de
+   clôture, positions, equity). Une remontée de stop (`HOLD` + `stop_level`) est
+   posée immédiatement ; un stop ne peut jamais être éloigné.
+
+Bougie `tradable=False`, `market_open` ou `event_blackout` (fonctions de la
+configuration) → l'ordre est refusé par le Risk Engine (`MARKET_CLOSED`,
+`EVENT_BLACKOUT`). Les trous dans la série sont listés comme interruptions.
+
+### Interface pour les connecteurs
+
+Un connecteur de prix implémente `PriceSource.get_bars(epic, timeframe, start, end) -> list[Bar]`
+(bougies **bid** + spread de la bougie). Un connecteur macro ou un agent publie
+des `Observation(series, period, value, available_at, source)` dans une
+`PointInTimeSource` ; le backtester n'expose que `as_of(series, heure_de_décision)`.
+Les stratégies fondamentales lisent par exemple `bias/swing` (`bullish`,
+`neutral`, `bearish`) et `regime`.
+
+### Garde-fous look-ahead du backtest
+
+- `CausalHistory` lève `LookaheadError` sur tout accès à une bougie future.
+- `PointInTimeView` lève `LookaheadError` si une source renvoie une valeur
+  publiée après l'instant de décision ; `InMemoryPointInTimeSource` refuse une
+  observation sans `available_at` (UTC) ou publiée avant sa période.
+- Exécution à l'ouverture suivante ; préchauffage (`trade_start`) sans trading.
+- `check_prefix_invariance` et `check_future_independence` : à exécuter sur
+  toute nouvelle stratégie (les benchmarks y passent dans les tests ; une
+  stratégie qui précalcule la clôture suivante est détectée).
+
+### Validation
+
+- `walk_forward_folds` : 24 mois d'optimisation, 6 mois de test, pas de 6 mois,
+  12 derniers mois en réserve ; chaque fenêtre de test repart de 20 € et se
+  préchauffe sur des bougies antérieures.
+- `walk_forward` : grille de paramètres, objectif Calmar avec un minimum de
+  trades (jamais le rendement seul) ; `n_trials` à reporter dans EXPERIMENTS.md
+  pour le Sharpe déflaté.
+- `HoldoutGuard` : la réserve finale ne s'ouvre qu'une fois (verrou sur fichier).
+- `run_stress` : spread ×2 et ×3, financement ×2, prime GSL +1 point, EUR/USD
+  1,00 et 1,30, cumul défavorable.
+
+### Benchmarks
+
+Tous passent par les mêmes coûts, la même taille minimale et le même Risk Engine :
+buy & hold (stop garanti à 95 % de la distance maximale, réentrée après stop),
+trend following SMA, technique FVG seule, fondamentale seule, complète
+(`FundamentalFilter`), entrées aléatoires avec les mêmes stops.
+
+### Limites connues
+
+- Données réelles non encore branchées : les résultats actuels viennent de
+  données **synthétiques** et ne disent rien de la stratégie.
+- Ajustements de dividendes non simulés (pas encore dans le broker simulé).
+- Take profit sur gap favorable à l'ouverture : exécuté au niveau du TP (prudent).
+- Bougie D1 = jour calendaire UTC (convention de `resample`), à recaler sur la
+  séance Capital.com.
+- Coûts (spread par défaut, financement, prime GSL) : hypothèses de `BrokerCosts`
+  à calibrer sur `GET /api/v1/markets/US500`.
+- Consensus macro historique indisponible gratuitement (F12) : aucune surprise
+  vs consensus ne doit être utilisée en backtest.
 
 ## Risk Engine
 
