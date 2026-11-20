@@ -1,0 +1,11 @@
+# Secrets
+.env
+*.env
+# Données personnelles et données sous licence
+TJ_*.xlsx
+data/
+*.parquet
+*.sqlite
+# Python
+__pycache__/
+.venv/
