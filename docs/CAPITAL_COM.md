@@ -77,7 +77,7 @@ Risque selon la distance du stop (0,01 lot) :
 
 1. **C'est faisable** techniquement : 0,01 lot accepté, frais négligeables par rapport au risque (le spread et la prime GSL représentent environ 1,5 % de la perte max).
 2. **La règle « 50 % de la marge » équivaut à un stop maximal de 2,5 % du prix** à 20:1, quelle que soit la taille : 1,62 € à 0,01 lot, recalculé à chaque trade.
-3. **La taille minimale impose un risque élevé** : au stop maximal, un seul trade risque 8 % du capital et 6 pertes suffisent à atteindre le drawdown de 50 %. Pour ramener le risque à environ 2–3 % du capital, le stop doit être à 50–75 points (invalidation H1 plutôt que H4). C'est pourquoi `RISK_POLICY.md` plafonne aussi le risque en % du capital.
+3. **La taille minimale impose un risque élevé** : au stop maximal, un seul trade risque 8 % du capital et 6 pertes suffisent à atteindre le drawdown de 50 %. Pour ramener le risque à environ 2–3 % du capital, le stop doit être à 50–75 points (invalidation H1 plutôt que H4). `RISK_POLICY.md` ajoute un second plafond de 20 % de l'equity (R9), qui ne joue qu'au-delà de 0,01 lot : la règle des 50 % s'applique en premier.
 4. **Le financement pèse sur le swing long** : 30 nuits coûtent 0,42 €, soit 26 % d'une perte max. D'où la sortie temporelle X3 de `STRATEGY.md`.
 5. **L'exposition max de 1 lot est hors de portée** : la marge limite à 0,06 lot au départ. La limite de 1 lot ne deviendra active qu'au-delà d'environ 340 € de capital.
 6. **Les vraies valeurs** (`minDealSize`, `minGuaranteedStopDistance`, prime GSL, spread, `overnightFee`) doivent être lues au démarrage via `GET /markets/US500`. Le Risk Engine refuse de trader si elles sont absentes.

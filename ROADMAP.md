@@ -9,7 +9,8 @@
 - [x] Vérification de l'API, du stop garanti et des frais Capital.com (`docs/CAPITAL_COM.md`)
 - [x] Faisabilité à 0,01 lot (`research/feasibility.py`)
 - [x] STRATEGY, RISK_POLICY, ROADMAP, EXPERIMENTS, DATA_SOURCES
-- [ ] Réponses d'Alexandre aux questions Q1–Q4, Q-R1, Q-R3 et Q-R4
+- [x] Réponses d'Alexandre : risque max 20 % par trade (après la règle des 50 %), trades Live tous chez Capital.com
+- [ ] Questions restantes : Q1, Q2, Q4, Q-R3, Q-R4
 
 **Sortie :** documents validés par Alexandre.
 
@@ -70,5 +71,5 @@
 | Pas de consensus macro gratuit en historique | Surprise vs nowcast ou modèle ; archivage maison dès maintenant |
 | Historique Capital.com court | Dukascopy calibré |
 | Surapprentissage (beaucoup de paramètres, peu de trades) | Walk-forward, réserve finale, budget d'essais déclaré dans EXPERIMENTS |
-| Capital de 20 € : 6 pertes max avant l'arrêt | Risque/trade plafonné (R9), paliers R17 |
+| Capital de 20 € : 6 pertes max avant l'arrêt à 0,01 lot (3 si le risque atteint 20 %) | R8 puis R9, paliers R17, marge ≤ 50 % (R19) |
 | Le journal ne prouve pas l'avantage fondamental | Mesurer l'apport du fondamental en A/B (EXP-01) |

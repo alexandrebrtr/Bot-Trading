@@ -16,7 +16,7 @@ Les lignes sans taille ni prix (dividendes, dépôts, retraits, 13 lignes) sont 
 | C2. Prop firms, autres | UK100, US100, MNQ | 74 | 13/05 → 06/10 |
 | D. Paper et Demo | UK100, US100 | 8 | 11/02 → 12/05 |
 
-Hypothèse : les trades `Live` sont tous chez Capital.com. Le journal note « Debut Broker » le 20/07 avec 300 € de dépôt, mais des trades Live plus anciens (balance de 10 à 15 €) existent. **À confirmer par Alexandre.**
+Tous les trades `Live` sont chez Capital.com (confirmé par Alexandre). Le segment A ne garde que l'US500 ; les UK100, US100 et Solana du compte Live (segment B), y compris ceux d'avant le dépôt de 300 € du 20/07, servent aussi à calibrer le simulateur (valeur du point, frais, dividendes).
 
 ## 2. Statistiques par segment
 

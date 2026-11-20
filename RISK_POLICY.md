@@ -20,14 +20,24 @@
 | # | Règle | Valeur | Statut |
 |---|---|---|---|
 | R7 | Stop loss garanti obligatoire, posé **dans le même ordre** que l'ouverture (`guaranteedStop=true`) | — | ✅ / 🏦 (obligation française) |
-| R8 | Perte max par position (stop + spread + prime GSL + conversion) | ≤ 50 % de la marge engagée ⇒ stop ≤ 2,5 % du prix à 20:1 | ✅ |
-| R9 | Perte max par position en % du capital courant | 🎛️ 2 % à 8 %, défaut **5 %** | ❓ (voir Q-R1) |
+| R8 | Perte max par position (stop + spread + prime GSL + conversion) | ≤ 50 % de la marge engagée ⇒ stop ≤ 2,5 % du prix à 20:1. **Plafond absolu, vérifié en premier.** | ✅ |
+| R9 | Perte max par position en % de l'equity courante, appliquée **après** R8 | ≤ **20 %** (plafond fixé par Alexandre) ; 🎛️ valeur effective entre 2 % et 20 % | ✅ |
 | R10 | Distance de stop ≥ `minGuaranteedStopDistance` ; si l'invalidation technique est plus proche, le stop est placé au minimum autorisé et le risque recalculé | — | 🏦 |
 | R11 | Si R8, R9 et la taille minimale sont incompatibles (stop trop loin) : `NO_TRADE`, jamais réduction du stop sous l'invalidation | — | ✅ |
 | R12 | Take profit facultatif | — | ✅ |
 | R13 | Le stop ne se déplace que dans le sens favorable | — | ✅ |
 | R14 | Spread au moment de l'entrée ≤ s × spread médian 20 jours | 🎛️ s ∈ [1,5 ; 3] | 🧪 |
 | R15 | Taille = plancher((risque autorisé) / (distance × valeur du point), pas de taille), bornée par R5 et la marge disponible | — | ✅ |
+
+### Ordre d'application des plafonds de perte
+
+1. **R8 d'abord (plafond absolu)** : perte ≤ 50 % de la marge engagée. Aucun autre paramètre ne peut l'assouplir.
+2. **R9 ensuite** : perte ≤ 20 % de l'equity courante.
+3. La perte autorisée est le **minimum** des deux.
+
+À 0,01 lot (US500 ≈ 7 520, capital 20 €), R8 limite déjà la perte à **≈ 1,62 €, soit ≈ 8 % du capital** : le plafond de 20 % ne joue pas. Il ne devient actif qu'avec une taille plus grande (par exemple 0,03 lot : 50 % de la marge = 4,86 € = 24 % du capital, ramené à 4,00 € par R9).
+
+⚠️ Avec 20 % par trade et un drawdown max de 50 %, **3 pertes pleines** suffisent à déclencher l'arrêt. R17 (division du risque après 20 % de drawdown) et R19 (marge ≤ 50 % de l'equity) limitent ce cas.
 
 ## 3. Règles de compte
 
@@ -63,10 +73,11 @@ Lues dans `GET /api/v1/markets/US500` ; si l'une manque, le bot refuse de trader
 
 ## 6. Décisions à valider
 
+Décidé : risque max par trade 20 % de l'equity (R9), appliqué après la règle des 50 % de la marge (R8).
+
 Décidé : la règle des 50 % de la marge prime (≈ 1,62 € à 0,01 lot et 7 520 points, recalculée à chaque trade) ; le chiffre de 1,70 € n'était qu'une estimation.
 
 | # | Question | Proposition |
 |---|---|---|
-| Q-R1 | Risque max par trade en % du capital (R9). La taille minimale rend 8 % possible au stop maximal. | 5 % du capital (stop ≤ ~115 points au début) |
 | Q-R3 | Le drawdown de 50 % se mesure-t-il depuis le capital initial (20 €) ou depuis le plus haut d'equity ? | Depuis le plus haut (plus prudent) |
 | Q-R4 | Après l'arrêt à −50 %, redémarrage avec un nouveau dépôt autorisé ? | Non sans revue complète |
