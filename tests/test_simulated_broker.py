@@ -111,7 +111,8 @@ def test_exposure_cap_across_orders():
 
 
 def test_drawdown_halt_closes_and_blocks():
-    s = replace(Settings(), risk=replace(Settings().risk, initial_capital_eur=5.0))
+    # risque par trade relevé à 50 % de l'equity : ce test vise le drawdown, pas cette règle
+    s = replace(Settings(), risk=replace(Settings().risk, initial_capital_eur=5.0, max_risk_fraction_of_equity=0.5))
     b = SimulatedBroker(s, eurusd=1.0)
     b.on_quote(Quote(T0, 6800.0, 6800.6))
     assert buy(b, stop=6640.6).accepted
@@ -128,7 +129,7 @@ def test_stop_out_when_margin_level_too_low():
     # sans stop garanti et avec un stop lointain, la marge s'épuise avant le stop
     s = replace(
         Settings(),
-        risk=replace(Settings().risk, require_guaranteed_stop=False, max_loss_fraction_of_margin=100, max_account_drawdown=1.0),
+        risk=replace(Settings().risk, require_guaranteed_stop=False, max_loss_fraction_of_margin=100, max_risk_fraction_of_equity=1.0, max_account_drawdown=1.0),
     )
     b = SimulatedBroker(s, eurusd=1.0)
     b.on_quote(Quote(T0, 6800.0, 6800.6))

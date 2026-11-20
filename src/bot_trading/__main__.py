@@ -27,6 +27,7 @@ def cmd_status(settings: Settings) -> int:
     print(f"Capital initial    : {r.initial_capital_eur} EUR, levier max {r.max_leverage:g}:1")
     print(f"Exposition max     : {r.max_total_exposure_lots} lot")
     print(f"Perte max/position : {r.max_loss_fraction_of_margin:.0%} de la marge engagée")
+    print(f"Risque max/trade   : {r.max_risk_fraction_of_equity:.0%} de l'equity")
     print(f"Drawdown max       : {r.max_account_drawdown:.0%}")
     print(f"Shorts             : {'autorisés' if r.allow_shorts else 'désactivés'}")
     print(f"Stop garanti       : {'obligatoire' if r.require_guaranteed_stop else 'facultatif'}")

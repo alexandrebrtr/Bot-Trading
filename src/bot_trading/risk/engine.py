@@ -15,6 +15,18 @@ Comme perte et marge sont toutes deux proportionnelles à la taille, cette règl
 revient à une distance de stop maximale indépendante de la taille :
 
     distance_max = 0,5 × prix / levier   (≈ 2,5 % du prix avec un levier de 20)
+
+Règle de risque maximal par trade
+---------------------------------
+La même perte au stop ne doit pas non plus dépasser ``max_risk_fraction_of_equity``
+(20 %) de l'equity au moment de l'ordre. La perte autorisée est donc :
+
+    perte_max = min(50 % de la marge engagée, 20 % de l'equity)
+
+La règle des 50 % reste le plafond absolu : la règle des 20 % ne peut que la
+resserrer. Avec 20 € et 0,01 lot (marge ≈ 3 €), c'est la règle des 50 % qui
+s'applique ; la règle des 20 % devient active dès que la taille augmente
+(marge > 40 % de l'equity, soit à partir d'environ 0,03 lot).
 """
 
 from __future__ import annotations
@@ -41,6 +53,7 @@ class Violation(str, Enum):
     STOP_WRONG_SIDE = "STOP_WRONG_SIDE"
     STOP_TOO_CLOSE = "STOP_TOO_CLOSE"
     MAX_LOSS_EXCEEDED = "MAX_LOSS_EXCEEDED"
+    MAX_RISK_PER_TRADE_EXCEEDED = "MAX_RISK_PER_TRADE_EXCEEDED"
     TAKE_PROFIT_WRONG_SIDE = "TAKE_PROFIT_WRONG_SIDE"
     INVALID_SIZE = "INVALID_SIZE"
     EXPOSURE_EXCEEDED = "EXPOSURE_EXCEEDED"
@@ -125,12 +138,31 @@ class RiskEngine:
         peak = max(peak_equity_eur, self.limits.initial_capital_eur)
         return peak * (1.0 - self.limits.max_account_drawdown)
 
-    def max_stop_distance(self, entry_price: float) -> float:
-        """Distance de stop maximale (points) respectant la perte max par position."""
-        return (
-            self.limits.max_loss_fraction_of_margin * entry_price / self.limits.max_leverage
-            - self.costs.guaranteed_stop_premium_points
+    def max_loss_allowed_eur(self, margin_eur: float, equity_eur: float) -> float:
+        """Perte maximale autorisée au stop : min(50 % de la marge, 20 % de l'equity)."""
+        return min(
+            self.limits.max_loss_fraction_of_margin * margin_eur,
+            self.limits.max_risk_fraction_of_equity * max(equity_eur, 0.0),
         )
+
+    def max_stop_distance(
+        self,
+        entry_price: float,
+        size: float | None = None,
+        equity_eur: float | None = None,
+        eurusd: float = 1.0,
+    ) -> float:
+        """Distance de stop maximale (points), prime du stop garanti déduite.
+
+        Sans ``size`` ni ``equity_eur`` : seule la règle des 50 % de la marge
+        (indépendante de la taille). Avec les deux : la règle combinée.
+        """
+        by_margin = self.limits.max_loss_fraction_of_margin * entry_price / self.limits.max_leverage
+        if size is not None and equity_eur is not None:
+            vpp = contract.value_per_point_eur(size, self.spec, eurusd)
+            by_equity = self.limits.max_risk_fraction_of_equity * max(equity_eur, 0.0) / vpp
+            by_margin = min(by_margin, by_equity)
+        return by_margin - self.costs.guaranteed_stop_premium_points
 
     def evaluate_account(self, account: AccountState) -> RiskDecision:
         """Surveillance continue. Déclenche le verrou si le drawdown max est atteint."""
@@ -204,9 +236,15 @@ class RiskEngine:
                 loss_points = distance + (self.costs.guaranteed_stop_premium_points if order.guaranteed_stop else 0.0)
                 max_loss = contract.value_per_point_eur(order.size, self.spec, market.eurusd) * loss_points
                 d["max_loss_eur"] = max_loss
-                d["max_loss_allowed_eur"] = self.limits.max_loss_fraction_of_margin * margin
-                if max_loss > self.limits.max_loss_fraction_of_margin * margin + _EPS:
+                by_margin = self.limits.max_loss_fraction_of_margin * margin
+                by_equity = self.limits.max_risk_fraction_of_equity * max(account.equity_eur, 0.0)
+                d["max_loss_allowed_eur"] = min(by_margin, by_equity)
+                d["max_loss_by_margin_eur"] = by_margin
+                d["max_loss_by_equity_eur"] = by_equity
+                if max_loss > by_margin + _EPS:
                     v.append(Violation.MAX_LOSS_EXCEEDED)
+                if max_loss > by_equity + _EPS:
+                    v.append(Violation.MAX_RISK_PER_TRADE_EXCEEDED)
                 floor = self.drawdown_floor_eur(account.peak_equity_eur)
                 if account.equity_eur - account.open_risk_to_stops_eur - max_loss < floor - _EPS:
                     v.append(Violation.DRAWDOWN_WOULD_BREACH)
