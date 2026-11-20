@@ -151,4 +151,5 @@ Variantes d'entrée à tester (voir `EXPERIMENTS.md`) : retour dans le FVG, miti
 | Q2 | Que faire d'une position ouverte quand le régime devient `RISK_OFF` ? | Stop au break-even, pas de sortie forcée |
 | Q3 | Les trades `Live` antérieurs au 20/07 sont-ils aussi chez Capital.com ? | Oui, à confirmer |
 | Q4 | Accepter que le bot trade nettement moins souvent que le journal (quelques trades par mois) ? | Oui, conséquence de S3 et E4 |
-| Q5 | La doc officielle de l'API indique qu'un compte démo est utilisable via `demo-api-capital.backend-capital.com`. Vérifier dans l'app (Paramètres → API) si un démo est quand même rattaché au compte ? | Oui, vérification de 2 minutes, sinon paper trading local |
+
+Décidé : pas de compte démo possible chez Capital.com (confirmé par Alexandre), le paper trading est local.

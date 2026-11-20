@@ -63,9 +63,10 @@ Lues dans `GET /api/v1/markets/US500` ; si l'une manque, le bot refuse de trader
 
 ## 6. Décisions à valider
 
+Décidé : la règle des 50 % de la marge prime (≈ 1,62 € à 0,01 lot et 7 520 points, recalculée à chaque trade) ; le chiffre de 1,70 € n'était qu'une estimation.
+
 | # | Question | Proposition |
 |---|---|---|
 | Q-R1 | Risque max par trade en % du capital (R9). La taille minimale rend 8 % possible au stop maximal. | 5 % du capital (stop ≤ ~115 points au début) |
-| Q-R2 | « Perte max 1,70 € » ou « 50 % de la marge » ? Les deux diffèrent de 5 %. | Garder la règle des 50 % (1,62 € à 7 520 points), recalculée à chaque trade |
 | Q-R3 | Le drawdown de 50 % se mesure-t-il depuis le capital initial (20 €) ou depuis le plus haut d'equity ? | Depuis le plus haut (plus prudent) |
 | Q-R4 | Après l'arrêt à −50 %, redémarrage avec un nouveau dépôt autorisé ? | Non sans revue complète |

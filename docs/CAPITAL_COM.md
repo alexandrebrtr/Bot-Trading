@@ -8,7 +8,7 @@
 | Élément | Détail | Statut |
 |---|---|---|
 | Base réelle | `https://api-capital.backend-capital.com/` | ✅ |
-| Base démo | `https://demo-api-capital.backend-capital.com/`. La doc indique « a demo account can be used ». Alexandre n'a pas de compte démo : à revérifier dans l'app (voir STRATEGY Q5). | ✅ |
+| Base démo | `https://demo-api-capital.backend-capital.com/`. La doc indique « a demo account can be used », mais Alexandre ne peut ouvrir aucun compte démo : non utilisé, paper trading local. | ✅ |
 | Authentification | `POST /api/v1/session` avec le header `X-CAP-API-KEY` et `identifier` + `password` dans le corps (variante chiffrée RSA via `GET /session/encryptionKey`). Les headers de réponse `CST` et `X-SECURITY-TOKEN` sont valables 10 min après le dernier usage. | ✅ |
 | Keep-alive | `GET /api/v1/ping` (authentifié), `GET /api/v1/time` (sans authentification) | ✅ |
 | Quotas | 10 requêtes/s par utilisateur ; 1 ordre / 0,1 s ; `POST /session` : 1/s par clé ; 1 000 ordres/h sur le démo | ✅ |
@@ -59,7 +59,6 @@ Calcul : `python research/feasibility.py` (hypothèses : US500 = 7 520, EUR/USD 
 | Marge engagée | 3,24 € (16 % du capital) |
 | Perte max = 50 % de la marge | **1,62 €** |
 | → distance de stop max | **188 points = 2,50 % du prix** |
-| Perte visée de 1,70 € | 197 points (2,62 %) : légèrement au-delà de la règle des 50 % |
 | Prime GSL si le stop est touché | 0,02 € |
 | Spread aller-retour | 0,005 € |
 | Financement long | 0,014 € par nuit, 0,42 € pour 30 nuits |
@@ -77,7 +76,7 @@ Risque selon la distance du stop (0,01 lot) :
 **Conclusions :**
 
 1. **C'est faisable** techniquement : 0,01 lot accepté, frais négligeables par rapport au risque (le spread et la prime GSL représentent environ 1,5 % de la perte max).
-2. **La règle « 50 % de la marge » équivaut à un stop maximal de 2,5 % du prix** à 20:1, quelle que soit la taille. Une perte visée de 1,70 € la dépasse de 5 % : retenir 1,62 € (ou recalculer à chaque trade).
+2. **La règle « 50 % de la marge » équivaut à un stop maximal de 2,5 % du prix** à 20:1, quelle que soit la taille : 1,62 € à 0,01 lot, recalculé à chaque trade.
 3. **La taille minimale impose un risque élevé** : au stop maximal, un seul trade risque 8 % du capital et 6 pertes suffisent à atteindre le drawdown de 50 %. Pour ramener le risque à environ 2–3 % du capital, le stop doit être à 50–75 points (invalidation H1 plutôt que H4). C'est pourquoi `RISK_POLICY.md` plafonne aussi le risque en % du capital.
 4. **Le financement pèse sur le swing long** : 30 nuits coûtent 0,42 €, soit 26 % d'une perte max. D'où la sortie temporelle X3 de `STRATEGY.md`.
 5. **L'exposition max de 1 lot est hors de portée** : la marge limite à 0,06 lot au départ. La limite de 1 lot ne deviendra active qu'au-delà d'environ 340 € de capital.

@@ -50,7 +50,7 @@ Doc : https://open-api.capital.com/
 - **Licence** : la page renvoie aux Terms and Conditions de Capital.com, sans clause spécifique sur les données. ⚠️ Usage personnel, ne pas redistribuer.
 - **Fiabilité** : c'est le prix exact du CFD tradé, donc la référence pour les signaux et le paper trading.
 - **Sécurité** : la session API est sur le **compte live**. Le module paper trading ne doit appeler **que** les endpoints de lecture (`/prices`, `/markets`, WebSocket). Prévoir un garde-fou dans le code qui bloque tout appel à `/positions` et `/workingorders`.
-- Note : la doc indique qu'un compte démo est utilisable via `demo-api-capital.backend-capital.com`. Alexandre n'en a pas : à revérifier dans l'app (STRATEGY Q5). En attendant, paper trading local.
+- Note : la doc indique qu'un compte démo est utilisable via `demo-api-capital.backend-capital.com`. Alexandre ne peut ouvrir aucun compte démo : paper trading local.
 - Frais, stop garanti et faisabilité à 0,01 lot : voir `docs/CAPITAL_COM.md`.
 
 ### 1.2 Dukascopy (historique long pour le backtest)

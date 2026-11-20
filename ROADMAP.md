@@ -9,7 +9,7 @@
 - [x] Vérification de l'API, du stop garanti et des frais Capital.com (`docs/CAPITAL_COM.md`)
 - [x] Faisabilité à 0,01 lot (`research/feasibility.py`)
 - [x] STRATEGY, RISK_POLICY, ROADMAP, EXPERIMENTS, DATA_SOURCES
-- [ ] Réponses d'Alexandre aux questions Q1–Q5 et Q-R1–Q-R4
+- [ ] Réponses d'Alexandre aux questions Q1–Q4, Q-R1, Q-R3 et Q-R4
 
 **Sortie :** documents validés par Alexandre.
 
