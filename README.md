@@ -23,7 +23,8 @@ l'entrée. L'absence d'opportunité conduit à `NO_TRADE`.
 | Fair Value Gap Engine | `bot_trading.analysis.fvg` | ✅ |
 | Order Block Engine | `bot_trading.analysis.order_blocks` | ✅ |
 | Agrégation multi-timeframe sans look-ahead | `bot_trading.marketdata.candles` | ✅ |
-| Ingestion macro / Fed / intermarchés | — | à venir (voir `DATA_SOURCES.md`) |
+| Data Engine : stockage Parquet point-in-time, traçabilité, qualité | `bot_trading.marketdata.storage`, `quality`, `engine` | ✅ |
+| Connecteurs : Capital.com (REST + WebSocket), Dukascopy, FRED/ALFRED, RSS Fed, SEC EDGAR, Cboe VIX, Trésor US | `bot_trading.marketdata.sources` | ✅ (mocks, jamais testés sur les vraies API) |
 | Moteur de décision, backtest, boucles d'amélioration | — | à venir |
 
 ## Démarrage rapide
@@ -34,7 +35,18 @@ pip install -e ".[dev]"
 python -m pytest            # aucun réseau, aucun identifiant
 python -m bot_trading status
 python -m bot_trading replay chemin/vers/bougies_m5.csv
+
+# Data Engine (réseau + .env) : collecte puis contrôle de fraîcheur
+python -m bot_trading.marketdata refresh fred fed-rss vix treasury
+python -m bot_trading.marketdata refresh capital --timeframes M5 H1 D1 --days 30
+python -m bot_trading.marketdata refresh dukascopy --timeframes M5 --days 365
+python -m bot_trading.marketdata refresh edgar
+python -m bot_trading.marketdata health
 ```
+
+Les données sont écrites dans `data/store/` (ignoré par git), une table Parquet
+par jeu de données et par année, plus `data/store/_lineage.jsonl` qui trace
+chaque collecte (source, URL sans clé, heure, empreinte SHA-256, licence).
 
 Avec Docker :
 
