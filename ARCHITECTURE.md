@@ -3,7 +3,10 @@
 ## Vue d'ensemble
 
 ```
-            données gratuites (FRED/ALFRED, Fed RSS, Cboe, Trésor, EDGAR…)   [à venir]
+            données gratuites (FRED/ALFRED, Fed RSS, Cboe, Trésor, EDGAR…)   [connecteurs à venir]
+                                     │ PointInTimeData
+                                     ▼
+                     intelligence/ (macro, entreprises, régime) ── RegimeAssessment
                                      │
 Capital.com (lecture seule) ──► marketdata/ (bougies bid/ask, M5→D1) ──► analysis/ (structure, FVG, OB)
                                      │                                   │
@@ -35,6 +38,13 @@ Il n'existe **aucune flèche** vers un broker réel.
 | `analysis/fvg.py` | Détection et qualification des FVG. | indicators, structure, zones |
 | `analysis/order_blocks.py` | Détection et qualification des order blocks. | indicators, structure, zones |
 | `marketdata/candles.py` | CSV, agrégation M5 → M15/H1/H4/D1 sans bougie incomplète. | core |
+| `intelligence/data.py` | Interface `PointInTimeData` (séries par vintage, Fed, calendrier, EDGAR, pondérations) et store en mémoire. | aucune |
+| `intelligence/macro.py` | Macro Intelligence Agent (F1 à F5) : biais, incertitude, scénarios, invalidations, sources. | data, fed, llm |
+| `intelligence/equity.py` | Equity Intelligence Agent (F7) : résultats des grosses pondérations, breadth, secteurs. | data |
+| `intelligence/regime.py` | Market Regime Engine : `RISK_ON` / `NEUTRE` / `RISK_OFF`, autorisation d'entrée, multiplicateur de taille ≤ 1, fenêtres d'annonce. | macro, equity |
+| `intelligence/llm.py`, `guard.py` | LLM optionnel (OpenAI Responses), désactivé par défaut et en backtest ; protection contre l'injection et les fuites de secrets. | pydantic, requests |
+
+Détail : `docs/INTELLIGENCE.md`. Le paquet `intelligence/` n'importe ni `risk`, ni `broker`, ni `core`.
 
 ## Garanties anti look-ahead
 
