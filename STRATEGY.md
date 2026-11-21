@@ -151,6 +151,6 @@ Variantes d'entrée à tester (voir `EXPERIMENTS.md`) : retour dans le FVG, miti
 | Q2 | Que faire d'une position ouverte quand le régime devient `RISK_OFF` ? | Stop au break-even, pas de sortie forcée |
 | Q4 | Accepter que le bot trade nettement moins souvent que le journal (quelques trades par mois) ? | Oui, conséquence de S3 et E4 |
 
-Implémentation (Decision Engine, en attente de validation) : Q1 et Q2 suivent les propositions par défaut ci-dessus (filtre + taille ; en `RISK_OFF`, stop resserré sans sortie forcée, option `ExitParams.on_risk_off`). Le passage en `NEUTRE` exige un setup de qualité ≥ 0,8 et divise le risque par deux.
+Implémentation (Decision Engine, **Q1 et Q2 validées par Alexandre le 21/11/2026**) : Q1 et Q2 suivent les propositions par défaut ci-dessus (filtre + taille ; en `RISK_OFF`, stop resserré sans sortie forcée, option `ExitParams.on_risk_off`). Un biais baissier déduit de la seule étiquette `RISK_OFF` ne force pas la sortie ; un biais baissier explicite reste une invalidation fondamentale. Le passage en `NEUTRE` exige un setup de qualité ≥ 0,8 et divise le risque par deux.
 
 Décidé : pas de compte démo possible chez Capital.com (confirmé par Alexandre), le paper trading est local. Tous les trades `Live` du journal sont chez Capital.com (confirmé par Alexandre).

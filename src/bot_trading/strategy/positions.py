@@ -5,8 +5,8 @@ comparée par backtest (EXP-07) :
 
 | Méthode | Paramètre | Action |
 |---|---|---|
-| Invalidation fondamentale | ``close_on_bias`` | CLOSE si le biais devient baissier |
-| Changement de régime | ``on_risk_off`` | ``tighten`` (Q2 par défaut : stop au break-even ou sous le dernier plus bas H1), ``close`` ou ``ignore`` |
+| Invalidation fondamentale | ``close_on_bias`` | CLOSE si le biais **explicite** devient baissier (un biais déduit du seul régime ne ferme pas) |
+| Changement de régime | ``on_risk_off`` | ``tighten`` (Q2 validée par Alexandre : stop au break-even ou sous le dernier plus bas H1, sans sortie forcée), ``close`` ou ``ignore`` |
 | Rupture de structure | ``structure_exit_tf`` | CLOSE sur BOS baissier H1 ou H4 postérieur à l'entrée |
 | Risque devenu excessif | ``max_open_risk_fraction`` | CLOSE si la perte au stop dépasse cette fraction de l'equity |
 | Sortie temporelle (X3) | ``max_days`` / ``max_days_min_r`` | CLOSE si +b R non atteint après N jours |
@@ -109,7 +109,7 @@ class PositionManager:
             return Decision(Action.CLOSE, reason=why, **common)
 
         # 1. Invalidation fondamentale (le fondamental domine).
-        if fund.available and fund.bias in p.close_on_bias:
+        if fund.available and fund.bias in p.close_on_bias and not fund.bias_inferred:
             return close(f"Invalidation fondamentale : biais {fund.bias} ({fund.describe()})")
         if fund.available and fund.regime == RISK_OFF and p.on_risk_off == "close":
             return close("Changement de régime : RISK_OFF")
