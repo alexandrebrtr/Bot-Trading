@@ -124,6 +124,7 @@ class PaperTrader:
         config: PaperConfig | None = None,
         strategy=None,
         clock: Callable[[], datetime] = _utc_now,
+        notifier: Callable[[str, str], object] | None = None,
     ) -> None:
         self.cfg = config or PaperConfig()
         settings = settings or Settings()
@@ -132,6 +133,7 @@ class PaperTrader:
         self.settings = settings
         self.feed = feed
         self.clock = clock
+        self.notifier = notifier
         self.root = Path(self.cfg.runtime_dir)
         self.regime = RuntimeRegimeProvider(self.root / "regime.json", self.cfg.regime_max_age)
         if strategy is None:
@@ -156,6 +158,15 @@ class PaperTrader:
         self.ks_reported = False
         self.started_at: datetime | None = None
         self.trades_closed = 0
+
+    def notify(self, kind: str, text: str) -> None:
+        """Alerte facultative (Telegram) : jamais bloquante, jamais une source d'ordre."""
+        if self.notifier is None:
+            return
+        try:
+            self.notifier(kind, text)
+        except Exception:  # noqa: BLE001
+            pass
 
     # ------------------------------------------------------------ chemins
     def path(self, name: str) -> Path:
@@ -281,6 +292,7 @@ class PaperTrader:
             ks = self.kill_switch.apply(self.broker.risk)
             if ks.engaged and not self.ks_reported:
                 self._event(bar.time, "KILL_SWITCH", f"Kill switch engagé ({ks.reason or 'sans motif'}) : aucun nouvel ordre")
+                self.notify("KILL_SWITCH", f"Kill switch engagé ({ks.reason or 'sans motif'}) : aucun nouvel ordre.")
                 self.ks_reported = True
             closed_before = self.trades_closed
             report.decisions += self._step(bar)
@@ -296,6 +308,8 @@ class PaperTrader:
             report.message = f"aucune nouvelle bougie (dernière close il y a {age.total_seconds() / 3600:.1f} h)"
         else:
             report.message = "aucune bougie disponible : lancer la collecte Capital.com (marketdata refresh capital)"
+        if not new:
+            self.regime.view(now)  # état du fondamental à cet instant (sinon : celui de la dernière bougie)
         if self.regime.last_problem:
             report.message += f" ; fondamental : {self.regime.last_problem}"
         self.heartbeat(now, "WARN" if report.kill_switch or (not new and loop.last_time is None) else "OK", report.message)
@@ -321,6 +335,17 @@ class PaperTrader:
             v = violations_of(rec.outcome)
             if v:
                 self._event(rec.executed_at or rec.time, "VETO", rec.decision.reason[:300], v)
+                if rec.decision.action == Action.LONG:
+                    self.notify("VETO", f"Achat refusé par le Risk Engine : {', '.join(v)}.\n{rec.decision.setup}")
+            if rec.outcome == "FILLED":
+                pos = next((p for d, p in broker.positions.items() if d not in before), None)
+                if pos is not None:
+                    risk = loop.info.get(pos.deal_id, (0.0,))[0]
+                    self.notify("ACHAT", (
+                        f"{pos.size:g} lot US500 à {pos.entry_price:.1f} (stop garanti {pos.stop_level:.1f}"
+                        + (f", TP {pos.take_profit_level:.1f}" if pos.take_profit_level else "")
+                        + f"), risque {risk:.2f} €.\n{rec.decision.setup} · {rec.decision.regime} · confiance {rec.decision.confidence or 0:.2f}"
+                    ))
 
         for t in broker.closed_trades:
             tr = loop.trade_record(t)
@@ -333,6 +358,8 @@ class PaperTrader:
                 "setup": tr.setup, "regime": tr.regime, "bias": tr.bias, "mode": "paper",
             })
             self.trades_closed += 1
+            r = f", {tr.r_multiple:+.2f} R" if tr.r_multiple is not None else ""
+            self.notify("CLÔTURE", f"{t.deal_id} fermé ({t.exit_reason}) à {t.exit_price:.1f} : {t.net_pnl_eur:+.2f} €{r}. Equity {broker.equity_eur():.2f} €.")
             loop.info.pop(t.deal_id, None)
             self.initial_stops.pop(t.deal_id, None)
         broker.closed_trades.clear()
@@ -346,6 +373,7 @@ class PaperTrader:
             self.kill_switch.engage(broker.risk, "Drawdown maximal du compte atteint (R16)", actor=COMPONENT, now=now)
             self._event(now, "DRAWDOWN_HALT", "Drawdown maximal atteint : positions clôturées, kill switch engagé")
             self.halt_reported = True
+            self.notify("ARRÊT", "Drawdown maximal atteint (R16) : positions clôturées, kill switch engagé. Reprise manuelle uniquement.")
         self.save_state()
         return records
 
@@ -355,6 +383,7 @@ class PaperTrader:
         row = decision_to_record(d, rec.time, outcome=rec.outcome, violations=violations_of(rec.outcome), price=price, timeframe=self.cfg.timeframe.value)
         row["stage"] = d.meta.get("stage", "")
         row["quality"] = d.meta.get("quality")
+        row["room_r"] = d.meta.get("room_r")
         row["executed_at"] = rec.executed_at
         row["estimated_risk_eur"] = d.estimated_risk_eur
         row["mode"] = "paper"
@@ -428,12 +457,17 @@ class PaperTrader:
     ) -> None:
         pending = self.start() if self.loop is None else None
         n = 0
+        failures = 0
         while max_cycles is None or n < max_cycles:
             if before_cycle is not None:
                 try:
                     before_cycle(self.clock())
+                    failures = 0
                 except Exception as e:  # noqa: BLE001 — une collecte ratée ne doit pas arrêter la boucle
                     self.heartbeat(self.clock(), "WARN", f"collecte en échec : {type(e).__name__}")
+                    failures += 1
+                    if failures == 3:  # une seule alerte par série d'échecs
+                        self.notify("DONNÉES", f"Collecte en échec 3 fois de suite ({type(e).__name__}) : plus de nouvelles bougies.")
             report = self.cycle(pending)
             pending = None
             if on_report is not None:

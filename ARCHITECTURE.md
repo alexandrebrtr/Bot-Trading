@@ -78,7 +78,10 @@ Il n'existe **aucune flèche** vers un broker réel.
 
 | `paper/trader.py` | `PaperTrader` : boucle de paper trading sur `EventLoop` (même code que le backtest), état persistant (`paper_state.json`), reprise et rattrapage, publication pour le dashboard, kill switch rechargé avant chaque bougie. | backtest, broker, risk, strategy, dashboard.runtime |
 | `paper/feeds.py` | `StoreBarFeed` (bougies closes du store, spread à la clôture), `CapitalRefresher` (collecte Capital.com en lecture seule), `InMemoryBarFeed` (tests). | marketdata |
-| `paper/regime.py` | `RuntimeRegimeProvider` : `FundamentalView` depuis `regime.json`, refusée si absente, périmée, de démo ou publiée après la décision. | strategy.fundamental, intelligence.schemas |
+| `paper/regime.py` | `RuntimeRegimeProvider` : `FundamentalView` depuis `regime.json` (ou `regime_history.jsonl` au rattrapage), refusée si absente, périmée, de démo ou publiée après la décision ; `RegimePublisher` : calcul horaire depuis le store. | strategy.fundamental, intelligence, marketdata.pit |
+| `paper/compare.py` | Comparaison paper / trades manuels (journal `.xlsx` ou CSV). | dashboard.runtime |
+| `marketdata/pit.py` | `StorePITData` : `PointInTimeData` des agents d'analyse sur le store Parquet ; `assess_regime`. | intelligence, storage |
+| `notify/telegram.py` | Alertes Telegram facultatives, sens unique. | requests |
 | `risk/kill_switch.py` | Kill switch persistant (`data/runtime/kill_switch.json`) : engagé via `RiskEngine.engage_kill_switch`, rechargé par `apply(engine)`, reprise sur confirmation humaine ; fichier illisible = engagé. | risk |
 | `dashboard/runtime.py` | Lecture tolérante de l'état d'exécution (`data/runtime/*.json[l]`) et helpers d'écriture atomique pour les producteurs. | aucune |
 | `dashboard/decision_feed.py` | Interface `DecisionFeed` consommée par le dashboard ; `publish_decision` pour le moteur de décision. | core |
@@ -325,6 +328,16 @@ regime.json ──► RuntimeRegimeProvider ──► DecisionStrategy ──►
   n'est jamais modifié par le préchauffage.
 - Un état illisible ou d'un autre timeframe bloque le démarrage : `paper reset`
   archive le compte (rien n'est supprimé).
-- Limite : sans `regime.json` publié par le Market Regime Engine, toutes les
-  décisions sont `NO_TRADE` (S2). La production automatique de `regime.json`
-  depuis le store n'est pas encore branchée.
+- Régime automatique : `marketdata/pit.py` (`StorePITData`) implémente
+  `PointInTimeData` sur le store (FRED/ALFRED par vintage, replis Cboe et
+  Trésor, RSS Fed → communications, calendrier FRED → événements, EDGAR →
+  résultats). `paper/regime.py` (`RegimePublisher`) évalue le régime à la
+  dernière clôture de bougie, chaque heure, et l'archive ; la couverture
+  minimale (2 composantes macro, 1 intermarchés) est exigée pour autoriser une
+  entrée. Un test vérifie que l'adaptateur reproduit l'évaluation du store en
+  mémoire des tests d'analyse.
+- Non collectés : pondérations de l'indice (licence SSGA), ISM, consensus ; les
+  dates FOMC ne viennent que du calendrier FRED s'il les liste.
+- Alertes : `notify/telegram.py`, en sens unique, désactivé sans
+  `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`, jamais bloquant, jeton jamais journalisé.
+- `paper/compare.py` : comparaison avec les trades manuels du journal.

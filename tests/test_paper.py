@@ -373,3 +373,19 @@ def test_dashboard_paper_status_line(tmp_path):
     drive(trader, clock, bars[2:3])
     line = views.paper_status(RuntimeReader(tmp_path).read_json("account.json"))
     assert "simulés" in line and "LONG" in line and "dernière bougie" in line
+
+
+def test_improvement_journal_reads_paper_runtime(tmp_path):
+    """Les boucles d'amélioration (PR #10) relient chaque trade paper à sa décision LONG."""
+    from bot_trading.improvement.journal import from_runtime
+
+    bars = flat(6)
+    bars.append(Bar(Candle(bars[-1].time + timedelta(hours=1), 6000, 6000, 5900, 5910), Timeframe.H1, 0.6))
+    clock = Clock(close_of(bars[1]))
+    trader = PaperTrader(InMemoryBarFeed(bars), Settings(), PaperConfig(runtime_dir=tmp_path), strategy=AlwaysLong(), clock=clock)
+    trader.start()
+    drive(trader, clock, bars[2:])
+    journal = from_runtime(tmp_path)
+    linked = journal.trades
+    assert linked and all(e.trade is not None and e.reason != "décision absente du journal" for e in linked)
+    assert linked[0].setup == "TEST" and linked[0].stage == "LONG" and linked[0].quality == 0.9
