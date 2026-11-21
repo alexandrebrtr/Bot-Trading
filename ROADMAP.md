@@ -35,6 +35,7 @@
 ## Phase 3 — Backtest et recherche
 
 - Moteur événementiel multi-timeframe, frais réels. ✅ moteur, benchmarks, métriques, walk-forward, réserve et stress tests livrés (`bot_trading.backtest`) ; reste à brancher les données réelles et le biais fondamental.
+- Decision Engine (mission, phase 4) : ✅ Technical Engine top-down, filtre d'obstacles, sizing, décisions LONG/HOLD/CLOSE/NO_TRADE avec pré-contrôle du Risk Engine, gestion des positions swing, branchés dans le backtester (`DecisionStrategy`) et testés sur données synthétiques. Paramètres par défaut non optimisés.
 - Expériences de `EXPERIMENTS.md`, walk-forward : optimisation sur fenêtre glissante, test sur la fenêtre suivante, réserve finale jamais touchée (🎛️ 12 derniers mois).
 - Comparaison systématique au benchmark « buy & hold US500 avec la même marge » et à la stratégie sans couche fondamentale.
 

@@ -12,8 +12,12 @@ Capital.com (lecture seule, REST + WebSocket) ──► marketdata/ ──► da
    intelligence/ (macro, entreprises, régime)        analysis/ (structure, FVG, OB)
                                      │ RegimeAssessment                  │
                                      ▼                                   ▼
-                            moteur de décision (fondamental dominant, technique secondaire)   [à venir]
-                                     │  OrderRequest
+      strategy/fundamental.py (FundamentalView)   strategy/technical.py (top-down D1→M5)
+                                     │                                   │  + obstacles.py
+                                     ▼                                   ▼
+                     strategy/decision_engine.py : LONG / HOLD / CLOSE / NO_TRADE
+                     (fondamental dominant, sizing.py, pré-contrôle RiskEngine, positions.py)
+                                     │  Decision → OrderRequest (backtester / paper)
                                      ▼
                               risk/engine.py  ── VETO ──► rejet journalisé
                                      │ approuvé
@@ -54,6 +58,12 @@ Il n'existe **aucune flèche** vers un broker réel.
 | `marketdata/source.py` | Interfaces `PriceSource` (bougies bid + spread) et `PointInTimeSource` (séries datées par leur disponibilité), implémentations mémoire et CSV. | core |
 | `marketdata/synthetic.py` | Bougies synthétiques déterministes (régimes, séances, gaps) pour tests et démo. | core |
 | `core/decision.py` | `Decision` : LONG / HOLD / CLOSE / NO_TRADE, invalidation, risque, setup, biais. | aucune |
+| `strategy/fundamental.py` | `FundamentalView` : régime, biais, autorisation d'entrée, multiplicateur ≤ 1, depuis une `RegimeAssessment` ou les séries point-in-time. | marketdata.source |
+| `strategy/technical.py` | Technical Engine top-down : EMA 20/50/100/200, ATR, structure, FVG et OB par timeframe ; setups H1/H4 notés ∈ [0 ; 1] et confirmés en M15 (ou base). | analysis |
+| `strategy/obstacles.py` | Premier obstacle au-dessus de l'entrée (FVG baissier, OB vendeur, swing haut non cassé), distance en R, ATR et spreads. | technical |
+| `strategy/sizing.py` | Taille = risque / (distance + prime) × valeur du point, plafonds R5, R8, R19 ; paliers de drawdown R17. Partagé avec le backtester. | config, core |
+| `strategy/positions.py` | Sorties swing (fondamental, régime, structure, temps, financement, risque) et remontée du stop garanti, jamais vers le bas. | technical, fundamental |
+| `strategy/decision_engine.py` | `DecisionEngine` (pipeline à 8 étages, champs de la mission) et `DecisionStrategy` (branchement backtester). | risk, strategy |
 | `backtest/engine.py` | Backtester événementiel chronologique. Réutilise `SimulatedBroker` et `RiskEngine`. | broker, risk, marketdata |
 | `backtest/strategies.py` | Benchmarks (buy & hold, trend following, technique FVG, fondamentale seule, complète, aléatoire). | analysis, backtest |
 | `backtest/metrics.py` | Métriques de la mission, Sharpe probabiliste et déflaté, risque de ruine. | backtest |
@@ -201,6 +211,44 @@ trend following SMA, technique FVG seule, fondamentale seule, complète
   à calibrer sur `GET /api/v1/markets/US500`.
 - Consensus macro historique indisponible gratuitement (F12) : aucune surprise
   vs consensus ne doit être utilisée en backtest.
+
+## Decision Engine (`bot_trading.strategy`)
+
+Pipeline, chaque étage pouvant répondre `NO_TRADE` (champ `meta["stage"]` du journal) :
+
+| # | Étage | Règles | Refus typique |
+|---|---|---|---|
+| 1 | fondamental | S2, F10, F11 : fondamental disponible, pas `RISK_OFF`, biais non baissier, hors fenêtre d'annonce, multiplicateur > 0 | « Fondamental indisponible : la technique seule ne peut pas ouvrir de position » |
+| 2 | D1 | T1 (close > EMA, pente +, structure non baissière), T3 (extension ≤ k ATR) | « Tendance D1 neutral » |
+| 3 | H4 | T2 : dernier BOS haussier | « Structure H4 bearish » |
+| 4 | setup / confirmation | Zone FVG ou OB haussière H1/H4 active, âge ≤ max, qualité ≥ seuil du régime (0,5 en `RISK_ON`, 0,8 en `NEUTRE`, 0,9 si DD ≥ 35 %), réaction mesurable sur le TF de confirmation selon la variante (`touch`, `half`, `full_reject`, `bos`) | « Zone FVG_H1 en jeu, pas de confirmation » |
+| 5 | exécution | E4/R8/R11 : stop sous la zone − buffer ATR, ≤ 2,5 % du prix ; R10 : distance minimale ; E5 : spread ≤ s × médiane | « Invalidation trop lointaine » |
+| 6 | obstacles | T4/E6 : place jusqu'au premier obstacle ≥ min R | « Potentiel insuffisant : … = 0,8 R » |
+| 7 | sizing | R9 : base × multiplicateur du régime × palier R17 ; R15, R5, R19 | `SIZE_BELOW_MIN` |
+| 8 | risk_veto | `RiskEngine.check_order` sur l'ordre estimé | « Veto du Risk Engine : KILL_SWITCH » |
+
+Le fondamental est **dominant** : les étages 2 à 8 ne peuvent que refuser. Une
+décision `LONG` porte la justification, le biais, la configuration, la
+confiance (0,6 × fondamental + 0,4 × qualité du setup), les conditions d'entrée
+et d'invalidation, le risque estimé en EUR, la durée envisagée et les sources
+(`Decision.missing_fields()` vide ; vérifié par les tests sur toutes les
+décisions d'un backtest).
+
+Le pré-contrôle n'est pas le veto définitif : à l'exécution (ouverture de la
+bougie suivante), le backtester redimensionne au prix réel avec `size_for_risk`
+et l'ordre passe par le Risk Engine du broker simulé.
+
+Timeframes : la base du backtest fixe le plus petit timeframe disponible. En
+base H1, la confirmation M15 et l'exécution M5 n'existent pas : la confirmation
+se fait en H1 (`TechnicalSnapshot.confirmation_tf`). Les tests utilisent H1 et M15.
+
+Positions ouvertes (`PositionManager`) : invalidation fondamentale (CLOSE),
+`RISK_OFF` (stop au break-even ou sous le dernier plus bas H1 par défaut, Q2),
+BOS baissier H4 après l'entrée (CLOSE), sortie temporelle X3, financement R22,
+puis break-even après +a R et stop suiveur sous les swing lows H1. Un nouveau
+stop est toujours strictement plus haut que l'actuel et sous le bid moins la
+distance minimale du stop garanti ; il n'existe aucune opération de retrait du
+stop, et une analyse indisponible laisse le stop garanti en place.
 
 ## Risk Engine
 

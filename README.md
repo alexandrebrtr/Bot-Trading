@@ -27,8 +27,11 @@ l'entrée. L'absence d'opportunité conduit à `NO_TRADE`.
 | Connecteurs : Capital.com (REST + WebSocket), Dukascopy, FRED/ALFRED, RSS Fed, SEC EDGAR, Cboe VIX, Trésor US | `bot_trading.marketdata.sources` | ✅ (mocks, jamais testés sur les vraies API) |
 | Interfaces de sources de données (prix, séries point-in-time) | `bot_trading.marketdata.source` | ✅ |
 | Backtester événementiel, benchmarks, métriques, walk-forward, stress tests | `bot_trading.backtest` | ✅ (validé sur données synthétiques, pas encore sur données réelles) |
+| Technical Engine top-down (D1, H4, H1, M15, M5), filtre d'obstacles, sizing | `bot_trading.strategy.technical`, `obstacles`, `sizing` | ✅ (données synthétiques) |
+| Decision Engine (LONG, HOLD, CLOSE, NO_TRADE) avec pré-contrôle du Risk Engine | `bot_trading.strategy.decision_engine` | ✅ (données synthétiques) |
+| Gestion des positions swing (sorties, remontée du stop garanti) | `bot_trading.strategy.positions` | ✅ (données synthétiques) |
 | Dashboard de suivi en lecture seule (Streamlit) + kill switch persistant | `bot_trading.dashboard`, `bot_trading.risk.kill_switch` | ✅ |
-| Moteur de décision, boucles d'amélioration | — | à venir |
+| Boucles d'amélioration | — | à venir |
 
 ## Démarrage rapide
 
@@ -40,6 +43,7 @@ python -m bot_trading status
 python -m bot_trading replay chemin/vers/bougies_m5.csv
 python -m bot_trading backtest --years 4 --walk-forward   # données SYNTHÉTIQUES
 python -m bot_trading backtest --csv bougies_h1_bid.csv --timeframe H1
+python -m bot_trading decisions --timeframe M15 --years 2 --out decisions.jsonl   # journal de décision
 
 # Data Engine (réseau + .env) : collecte puis contrôle de fraîcheur
 python -m bot_trading.marketdata refresh fred fed-rss vix treasury

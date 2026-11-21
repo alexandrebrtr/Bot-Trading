@@ -36,6 +36,7 @@ from bot_trading.core.decision import Action, Decision
 from bot_trading.core.models import Candle, ClosedTrade, Direction, OrderRequest, Position, Quote, Timeframe
 from bot_trading.marketdata.candles import bucket_start
 from bot_trading.marketdata.source import Bar, Observation, PointInTimeSource
+from bot_trading.strategy.sizing import size_for_risk
 
 
 class LookaheadError(IndexError):
@@ -237,6 +238,8 @@ class BacktestConfig:
     # Fermetures et fenêtres d'annonce, évaluées à l'instant d'exécution.
     market_open: Callable[[datetime], bool] | None = None
     event_blackout: Callable[[datetime], bool] | None = None
+    # R19 (🧪) : marge totale ≤ cette fraction de l'equity au dimensionnement. None = pas de plafond.
+    max_margin_fraction: float | None = None
     # Timeframes supérieurs agrégés pour la stratégie.
     higher_timeframes: tuple[Timeframe, ...] = (Timeframe.M15, Timeframe.H1, Timeframe.H4, Timeframe.D1)
 
@@ -381,18 +384,27 @@ class Backtester:
             stop = q.ask - spec.min_guaranteed_stop_distance
         size = d.size
         if size is None:
-            loss_pts = (q.ask - stop) + costs.guaranteed_stop_premium_points
-            if loss_pts <= 0:
+            if (q.ask - stop) + costs.guaranteed_stop_premium_points <= 0:
                 return "VETO: STOP_WRONG_SIDE (gap sous le stop)"
-            rf = d.risk_fraction if d.risk_fraction is not None else cfg.default_risk_fraction
-            rf = min(rf, broker.limits.max_risk_fraction_of_equity)
-            risk_eur = rf * broker.equity_eur()
-            vpp1 = contract.value_per_point_eur(1.0, spec, broker.eurusd)
-            size = contract.floor_size(risk_eur / (loss_pts * vpp1), spec)
-            room = contract.floor_size(broker.limits.max_total_exposure_lots - broker.open_exposure_lots(), spec)
-            size = min(size, room)
-            if size < spec.min_size:
+            sized = size_for_risk(
+                equity_eur=broker.equity_eur(),
+                entry=q.ask,
+                stop=stop,
+                risk_fraction=d.risk_fraction if d.risk_fraction is not None else cfg.default_risk_fraction,
+                spec=spec,
+                costs=costs,
+                limits=broker.limits,
+                eurusd=broker.eurusd,
+                open_exposure_lots=broker.open_exposure_lots(),
+                used_margin_eur=broker.used_margin_eur(),
+                max_margin_fraction=cfg.max_margin_fraction,
+                check_max_distance=False,  # R8 : vérifié par le Risk Engine (veto journalisé)
+            )
+            if not sized.ok:
+                if sized.reason == "STOP_WRONG_SIDE":
+                    return "VETO: STOP_WRONG_SIDE (gap sous le stop)"
                 return "SIZE_BELOW_MIN"  # R11 : jamais de stop rapproché pour faire entrer la taille
+            size = sized.size
         order = OrderRequest(
             epic=spec.epic,
             direction=Direction.BUY,

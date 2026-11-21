@@ -5,8 +5,12 @@ Commandes :
 - ``replay <fichier.csv>`` : rejoue des bougies M5 (bid) dans les moteurs FVG / OB
   et le broker simulé, sans aucun ordre (diagnostic des détections) ;
 - ``backtest`` : compare les benchmarks (buy & hold, trend following, technique
-  seule, fondamentale seule, complète, aléatoire) sur un CSV bid ou sur des
-  données synthétiques, et peut lancer un walk-forward ;
+  seule, fondamentale seule, complète, aléatoire) et la stratégie complète du
+  Decision Engine sur un CSV bid ou sur des données synthétiques, et peut lancer
+  un walk-forward ;
+- ``decisions`` : rejoue la stratégie complète et affiche le journal de décision
+  (étage de refus, justification, risque estimé) ; ``--publish`` l'écrit au
+  format du dashboard ;
 - ``dashboard`` : lance le dashboard Streamlit en lecture seule (``--demo`` pour
   des données synthétiques) ;
 - ``kill-switch`` : affiche, engage ou lève (confirmation humaine) le kill switch.
@@ -73,9 +77,11 @@ def cmd_backtest(args) -> int:
     from bot_trading.core.models import Timeframe
     from bot_trading.marketdata.source import CsvPriceSource, InMemoryPointInTimeSource
     from bot_trading.marketdata.synthetic import generate_bars, synthetic_bias
+    from bot_trading.strategy import DecisionParams, DecisionStrategy
 
     settings = Settings(mode=TradingMode.BACKTEST)
-    config = BacktestConfig(settings=settings, default_risk_fraction=args.risk)
+    # R19 (marge ≤ 50 % de l'equity) appliqué à toutes les stratégies : benchmarks comparables.
+    config = BacktestConfig(settings=settings, default_risk_fraction=args.risk, max_margin_fraction=0.5)
     tf = Timeframe(args.timeframe)
     pit = None
     if args.csv:
@@ -97,6 +103,7 @@ def cmd_backtest(args) -> int:
     if pit is not None:
         factories["Fondamentale seule"] = lambda: FundamentalOnly(settings)
         factories["Complète (biais + FVG)"] = lambda: FundamentalFilter(FVGTechnical(settings))
+        factories["Complète (Decision Engine)"] = lambda: DecisionStrategy(settings, decision=DecisionParams(base_risk_fraction=args.risk))
     results = compare(factories, bars, config, pit)
     print(metrics_table(results))
 
@@ -110,8 +117,69 @@ def cmd_backtest(args) -> int:
         print("\nWalk-forward (technique FVG) :")
         for k, v in rep.summary().items():
             print(f"  {k}: {v}")
+        if pit is not None:
+            from bot_trading.strategy import TechnicalParams
+
+            grid = {"entry_mode": ["touch", "half", "full_reject", "bos"]}
+            rep = walk_forward(
+                lambda p: DecisionStrategy(settings, technical=TechnicalParams(**p), decision=DecisionParams(base_risk_fraction=args.risk)),
+                grid, bars, folds, config, pit,
+            )
+            print("\nWalk-forward (Decision Engine, variante d'entrée EXP-03) :")
+            for k, v in rep.summary().items():
+                print(f"  {k}: {v}")
         if holdout:
             print(f"Réserve finale non ouverte : {holdout[0].date()} → {holdout[1].date()}")
+    return 0
+
+
+def cmd_decisions(args) -> int:
+    """Journal de décision de la stratégie complète (données synthétiques)."""
+    import json
+    from collections import Counter
+    from datetime import datetime, timezone
+
+    from bot_trading.backtest.engine import BacktestConfig, Backtester
+    from bot_trading.config import TradingMode
+    from bot_trading.core.models import Timeframe
+    from bot_trading.marketdata.source import InMemoryPointInTimeSource
+    from bot_trading.marketdata.synthetic import generate_bars, synthetic_bias
+    from bot_trading.strategy import DecisionParams, DecisionStrategy
+
+    settings = Settings(mode=TradingMode.BACKTEST)
+    tf = Timeframe(args.timeframe)
+    start = datetime(2018, 1, 1, tzinfo=timezone.utc)
+    end = start.replace(year=start.year + args.years)
+    bars, labels = generate_bars(start, end, tf, seed=args.seed)
+    pit = InMemoryPointInTimeSource(synthetic_bias(labels))
+    config = BacktestConfig(settings=settings, max_margin_fraction=0.5)
+    res = Backtester(config, pit).run(DecisionStrategy(settings, decision=DecisionParams(base_risk_fraction=args.risk)), bars)
+    print(f"Données SYNTHÉTIQUES (graine {args.seed}), {len(bars)} bougies {tf.value} : ce ne sont pas des résultats de marché.")
+    stages = Counter((r.decision.action.value, r.decision.meta.get("stage", "")) for r in res.decisions)
+    print("\nDécisions par action et étage :")
+    for (action, stage), n in stages.most_common():
+        print(f"  {action:9} {stage:13} {n}")
+    shown = [r for r in res.decisions if r.decision.action.value != "NO_TRADE" or r.decision.meta.get("stage") not in ("fondamental", "D1", "H4")]
+    print(f"\n{min(args.last, len(shown))} dernières décisions hors refus fondamental/D1/H4 :")
+    for r in shown[-args.last:]:
+        d = r.decision
+        risk = f"{d.estimated_risk_eur:.2f} €" if d.estimated_risk_eur is not None else "—"
+        print(f"  {r.time:%Y-%m-%d %H:%M} {d.action.value:8} {r.outcome[:24]:24} conf {d.confidence or 0:.2f} risque {risk:8} {d.setup:10} {d.reason[:110]}")
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as fh:
+            for r in res.decisions:
+                row = {"time": r.time.isoformat(), "outcome": r.outcome, **r.decision.to_dict()}
+                fh.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
+        print(f"\nJournal complet : {args.out}")
+    if args.publish:
+        from bot_trading.dashboard.decision_feed import publish_decision
+
+        for r in res.decisions:
+            violations = r.outcome.removeprefix("VETO: ").split(", ") if r.outcome.startswith("VETO") else ()
+            publish_decision(args.publish, r.decision, time=r.time, outcome=r.outcome, violations=violations, timeframe=tf.value)
+        print(f"Décisions publiées pour le dashboard : {args.publish}")
+    m = res.metrics()
+    print(f"\nTrades {m.trades}, P&L net {m.net_pnl_eur:.2f} €, DD max {m.max_drawdown:.1%}")
     return 0
 
 
@@ -188,6 +256,14 @@ def main(argv: list[str] | None = None) -> int:
     bt.add_argument("--train-months", type=int, default=24)
     bt.add_argument("--test-months", type=int, default=6)
     bt.add_argument("--holdout-months", type=int, default=12)
+    dc = sub.add_parser("decisions")
+    dc.add_argument("--timeframe", default="H1", choices=["M5", "M15", "H1"])
+    dc.add_argument("--years", type=int, default=2)
+    dc.add_argument("--seed", type=int, default=2)
+    dc.add_argument("--risk", type=float, default=0.10)
+    dc.add_argument("--last", type=int, default=15)
+    dc.add_argument("--out", help="écrit le journal complet en JSONL")
+    dc.add_argument("--publish", help="publie les décisions pour le dashboard (ex. data/runtime/decisions.jsonl)")
     db = sub.add_parser("dashboard", help="dashboard Streamlit en lecture seule")
     db.add_argument("--demo", action="store_true", help="données synthétiques (data/demo)")
     db.add_argument("--demo-dir", default="data/demo")
@@ -205,6 +281,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.cmd == "backtest":
         return cmd_backtest(args)
+    if args.cmd == "decisions":
+        return cmd_decisions(args)
     if args.cmd == "dashboard":
         return cmd_dashboard(args)
     settings = Settings.from_env()
