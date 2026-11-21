@@ -13,7 +13,10 @@ Commandes :
   format du dashboard ;
 - ``dashboard`` : lance le dashboard Streamlit en lecture seule (``--demo`` pour
   des données synthétiques) ;
-- ``kill-switch`` : affiche, engage ou lève (confirmation humaine) le kill switch.
+- ``kill-switch`` : affiche, engage ou lève (confirmation humaine) le kill switch ;
+- ``improve`` : un cycle des boucles d'amélioration (journal décisions/résultats,
+  analyse post-trade, ré-évaluation walk-forward) ; propose, n'applique rien.
+  ``--review ID --reviewer NOM --approve|--reject`` trace une revue humaine.
 
 Il n'existe aucune commande d'exécution réelle.
 """
@@ -240,6 +243,89 @@ def cmd_kill_switch(args, settings: Settings) -> int:
     return 0
 
 
+def _parse_grid(items: list[str]) -> dict:
+    def conv(v: str):
+        if v.lower() == "none":
+            return None
+        for t in (int, float):
+            try:
+                return t(v)
+            except ValueError:
+                pass
+        return v
+
+    grid: dict = {}
+    for it in items:
+        k, _, vals = it.partition("=")
+        grid[k.strip()] = [conv(v.strip()) for v in vals.split(",") if v.strip()]
+    return grid
+
+
+def cmd_improve(args) -> int:
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from bot_trading.backtest.engine import Backtester, BacktestConfig
+    from bot_trading.config import TradingMode
+    from bot_trading.core.models import Timeframe
+    from bot_trading.improvement import ExperimentRegistry, ProtectedParameterError, from_backtest, from_runtime, run_cycle
+    from bot_trading.improvement.reevaluation import decision_factory, validate_grid
+    from bot_trading.marketdata.source import InMemoryPointInTimeSource
+    from bot_trading.marketdata.synthetic import generate_bars, synthetic_bias
+
+    out_dir = Path(args.out_dir)
+    registry = ExperimentRegistry(out_dir / "experiments.jsonl")
+    if args.review:
+        try:
+            rec = registry.review(args.review, args.reviewer or "", approve=args.approve, note=args.note)
+        except (ValueError, KeyError) as e:
+            print(e, file=sys.stderr)
+            return 1
+        print(f"Revue enregistrée : {rec['status']} (aucun paramètre appliqué)")
+        return 0
+
+    settings = Settings(mode=TradingMode.BACKTEST)
+    current = _parse_grid(args.current) if args.current else {}
+    current = {k: v[0] for k, v in current.items()}
+    grid = _parse_grid(args.grid) if args.grid else {"t.entry_mode": ["touch", "half", "full_reject", "bos"]}
+    try:
+        validate_grid(grid)
+        validate_grid({k: [v] for k, v in current.items()})
+    except ProtectedParameterError as e:
+        print(f"Refusé : {e}", file=sys.stderr)
+        return 2
+    except ValueError as e:
+        print(e, file=sys.stderr)
+        return 2
+    tf = Timeframe(args.timeframe)
+    start = datetime(2018, 1, 1, tzinfo=timezone.utc)
+    end = start.replace(year=start.year + args.years)
+    bars, labels = generate_bars(start, end, tf, seed=args.seed)
+    pit = InMemoryPointInTimeSource(synthetic_bias(labels))
+    print(f"Données de prix : SYNTHÉTIQUES (graine {args.seed}), {len(bars)} bougies {tf.value}. Ce ne sont pas des résultats de marché.")
+    asof = datetime.fromisoformat(args.asof).replace(tzinfo=timezone.utc) if args.asof else end
+    if args.runtime:
+        journal = from_runtime(args.runtime)
+        print(f"Journal : {args.runtime} ({len(journal.entries)} décisions, {len(journal.trades)} trades)")
+        if args.asof is None:
+            asof = datetime.now(timezone.utc)
+    else:
+        config = BacktestConfig(settings=settings, max_margin_fraction=0.5)
+        res = Backtester(config, pit).run(decision_factory(settings, current)({}), [b for b in bars if b.time < asof])
+        journal = from_backtest(res)
+        print(f"Journal : backtest des paramètres actuels ({len(journal.entries)} décisions, {len(journal.trades)} trades)")
+    result = run_cycle(
+        journal, asof, settings, bars=bars, pit=pit, current=current, grid=None if args.no_reevaluation else grid,
+        registry=registry, out_dir=out_dir, min_n=args.min_n,
+        train_months=args.train_months, test_months=args.test_months, holdout_months=args.holdout_months,
+    )
+    print(result.to_markdown())
+    print(f"\nRapport : {result.report_path}")
+    if result.proposal is not None:
+        print(f"Proposition enregistrée dans {registry.path} : {result.proposal.status}. Rien n'a été appliqué.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="bot_trading")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -278,6 +364,26 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--reset", action="store_true")
     ks.add_argument("--reason", default="")
     ks.add_argument("--confirm", default="", help="JE_CONFIRME_LA_REPRISE pour --reset")
+    im = sub.add_parser("improve", help="cycle d'amélioration : journal, post-trade, walk-forward (propose seulement)")
+    im.add_argument("--runtime", help="dossier du paper trading (decisions.jsonl, trades.jsonl) ; sinon backtest synthétique")
+    im.add_argument("--asof", help="date de connaissance (ISO, UTC) ; défaut : fin des données")
+    im.add_argument("--timeframe", default="H1", choices=["M15", "H1", "H4"])
+    im.add_argument("--years", type=int, default=5)
+    im.add_argument("--seed", type=int, default=1)
+    im.add_argument("--current", action="append", help="paramètre actuel, ex. t.entry_mode=half")
+    im.add_argument("--grid", action="append", help="grille, ex. t.entry_mode=touch,half (répétable)")
+    im.add_argument("--no-reevaluation", action="store_true", help="journal et post-trade seulement")
+    im.add_argument("--train-months", type=int, default=24)
+    im.add_argument("--test-months", type=int, default=6)
+    im.add_argument("--holdout-months", type=int, default=12)
+    im.add_argument("--min-n", type=int, default=10, help="trades minimum pour commenter un groupe")
+    im.add_argument("--out-dir", default="data/runtime")
+    im.add_argument("--review", help="identifiant de la proposition à revoir")
+    im.add_argument("--reviewer", help="nom du relecteur humain")
+    rv = im.add_mutually_exclusive_group()
+    rv.add_argument("--approve", action="store_true")
+    rv.add_argument("--reject", action="store_true")
+    im.add_argument("--note", default="")
     args = parser.parse_args(argv)
     if args.cmd == "backtest":
         return cmd_backtest(args)
@@ -285,6 +391,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_decisions(args)
     if args.cmd == "dashboard":
         return cmd_dashboard(args)
+    if args.cmd == "improve":
+        return cmd_improve(args)
     settings = Settings.from_env()
     if args.cmd == "kill-switch":
         return cmd_kill_switch(args, settings)

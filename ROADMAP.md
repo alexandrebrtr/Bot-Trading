@@ -10,7 +10,8 @@
 - [x] Faisabilité à 0,01 lot (`research/feasibility.py`)
 - [x] STRATEGY, RISK_POLICY, ROADMAP, EXPERIMENTS, DATA_SOURCES
 - [x] Réponses d'Alexandre : risque max 20 % par trade (après la règle des 50 %), trades Live tous chez Capital.com
-- [ ] Questions restantes : Q1, Q2, Q4, Q-R3, Q-R4
+- [x] Q1 et Q2 validées par Alexandre (21/11/2026) : régime défavorable = pas de nouvelle entrée et taille réduite ; en `RISK_OFF`, stop resserré sans sortie forcée
+- [ ] Questions restantes : Q4, Q-R3, Q-R4
 
 **Sortie :** documents validés par Alexandre.
 
@@ -54,6 +55,8 @@
 - Agent « chercheur » : propose des variantes (paramètres 🎛️ dans leur plage, nouvelles features), les teste en walk-forward, rédige un rapport.
 - Agent « critique » : vérifie le surapprentissage (nombre d'essais, déflation du Sharpe, stabilité par régime).
 - Promotion d'une variante uniquement après paper trading et validation d'Alexandre. Registre versionné des modèles et paramètres.
+
+Socle livré (`bot_trading.improvement`, `python -m bot_trading improve`) : journal décisions → résultats avec lecture causale (`as_of`), analyse post-trade (par setup, régime, qualité, sortie, durée ; contrefactuel des `NO_TRADE` par étage), ré-évaluation walk-forward des paramètres 🎛️ contre les paramètres actuels, registre `experiments.jsonl` en ajout seul avec revue humaine tracée. Les limites de risque sont hors de l'espace de recherche ; aucune proposition n'est appliquée automatiquement.
 
 **Sortie :** processus documenté, reproductible, avec retour arrière en une commande.
 
