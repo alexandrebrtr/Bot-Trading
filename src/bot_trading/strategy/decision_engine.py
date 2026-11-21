@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import statistics
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 from bot_trading.config import Settings
@@ -299,6 +299,21 @@ class DecisionStrategy:
         self.peak = 0.0
         self.spreads: deque[float] = deque(maxlen=self.engine.p.spread_window)
         self._pending_setup = ""
+
+    def restore_position(self, position: Position, initial_stop: float | None = None, setup: str = "") -> None:
+        """Reprise du paper trading après redémarrage.
+
+        Mémorise le stop d'ouverture (référence du R, le stop courant a pu
+        monter) et le setup d'une position rechargée. Un stop déjà au-dessus du
+        prix d'entrée signifie que le break-even a été fait : le stop suiveur
+        reprend donc là où il en était.
+        """
+        opening = replace(position, stop_level=initial_stop) if initial_stop is not None else position
+        track = self.manager.register(opening, setup)
+        if position.stop_level >= position.entry_price:
+            track.breakeven_done = True
+        if setup:
+            self._pending_setup = setup
 
     def _fund(self, ctx) -> FundamentalView:
         if self.fundamental_provider is not None:

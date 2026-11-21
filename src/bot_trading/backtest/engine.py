@@ -244,122 +244,138 @@ class BacktestConfig:
     higher_timeframes: tuple[Timeframe, ...] = (Timeframe.M15, Timeframe.H1, Timeframe.H4, Timeframe.D1)
 
 
-class Backtester:
-    def __init__(self, config: BacktestConfig | None = None, pit: PointInTimeSource | None = None) -> None:
-        self.config = config or BacktestConfig()
-        if self.config.settings.mode != TradingMode.BACKTEST:
-            self.config = replace(self.config, settings=replace(self.config.settings, mode=TradingMode.BACKTEST))
-        self.pit = pit
+class EventLoop:
+    """Cœur partagé par le backtester et le paper trading : une bougie à la fois.
 
-    def run(self, strategy: Strategy, bars: Sequence[Bar], trade_start: datetime | None = None) -> BacktestResult:
-        """Rejoue ``bars``. Avant ``trade_start``, la stratégie se préchauffe sans trader."""
+    ``step(bar)`` applique les étapes 1 à 4 décrites en tête de module. Le
+    backtester l'appelle sur une série historique ; la boucle de paper trading
+    l'appelle sur chaque nouvelle bougie close reçue en temps réel. Les deux
+    exécutent donc exactement le même code (exécution, dimensionnement, broker
+    simulé, Risk Engine).
+
+    ``history_limit`` borne la mémoire des bougies conservées pour
+    ``BarContext.history`` (paper trading de longue durée) ; ``ctx.index`` reste
+    l'indice global de la bougie dans le flux.
+    """
+
+    def __init__(
+        self,
+        config: BacktestConfig,
+        strategy: Strategy,
+        pit: PointInTimeSource | None = None,
+        broker: SimulatedBroker | None = None,
+        history_limit: int | None = None,
+    ) -> None:
+        self.config = config
+        self.strategy = strategy
+        self.pit = pit
+        self.broker = broker or SimulatedBroker(config.settings, eurusd=config.eurusd)
+        self.history_limit = history_limit
+        self.bars: list[Bar] = []
+        self.offset = 0  # indice global de self.bars[0]
+        self.timeframe: Timeframe | None = None
+        self.mtf: MultiTimeframe | None = None
+        self.pending: Decision | None = None
+        self.pending_rec: tuple[int, datetime] | None = None
+        # deal_id → (risque initial en EUR, décision d'ouverture, heure de la décision)
+        self.info: dict[str, tuple[float, Decision, datetime]] = {}
+        self.decisions: list[DecisionRecord] = []
+        self.equity_curve: list[tuple[datetime, float]] = []
+        self.interruptions: list[tuple[datetime, datetime]] = []
+        self.exposure_bars = 0
+
+    @property
+    def last_time(self) -> datetime | None:
+        return self.bars[-1].time if self.bars else None
+
+    @property
+    def next_index(self) -> int:
+        return self.offset + len(self.bars)
+
+    def step(self, bar: Bar, trading: bool = True, decide: bool = True) -> list[DecisionRecord]:
+        """Traite une bougie close. Renvoie les décisions journalisées pendant ce pas.
+
+        ``trading=False`` : préchauffage (la stratégie voit la bougie, aucun ordre).
+        ``decide=False`` : la décision prise à la clôture n'est pas mise en attente
+        (dernière bougie d'un backtest).
+        """
         cfg = self.config
         settings = cfg.settings
-        if not bars:
-            raise ValueError("Aucune bougie")
-        tf = bars[0].timeframe
-        for a, b in zip(bars, bars[1:]):
-            if b.time <= a.time:
-                raise ValueError(f"Bougies non chronologiques : {a.time} puis {b.time}")
-            if b.timeframe != tf:
-                raise ValueError("Toutes les bougies doivent avoir le même timeframe")
+        broker = self.broker
+        if self.timeframe is None:
+            self.timeframe = bar.timeframe
+            self.mtf = MultiTimeframe(bar.timeframe, cfg.higher_timeframes)
+        tf = self.timeframe
+        if bar.timeframe != tf:
+            raise ValueError("Toutes les bougies doivent avoir le même timeframe")
         step = timedelta(minutes=tf.minutes)
+        prev = self.bars[-1] if self.bars else None
+        if prev is not None:
+            if bar.time <= prev.time:
+                raise ValueError(f"Bougies non chronologiques : {prev.time} puis {bar.time}")
+            if bar.time - prev.time > step:
+                self.interruptions.append((prev.time + step, bar.time))
+        self.bars.append(bar)
+        if self.history_limit is not None and len(self.bars) > self.history_limit:
+            drop = len(self.bars) - self.history_limit
+            del self.bars[:drop]
+            self.offset += drop
+        i = self.next_index - 1
+        n_before = len(self.decisions)
+        spread = settings.costs.default_spread_points if bar.spread is None else bar.spread
 
-        broker = SimulatedBroker(settings, eurusd=cfg.eurusd)
-        mtf = MultiTimeframe(tf, cfg.higher_timeframes)
-        pending: Decision | None = None
-        pending_rec: tuple[int, datetime] | None = None
-        info: dict[str, tuple[float, Decision, datetime]] = {}
-        decisions: list[DecisionRecord] = []
-        equity_curve: list[tuple[datetime, float]] = []
-        interruptions: list[tuple[datetime, datetime]] = []
-        exposure_bars = 0
-        initial_equity: float | None = None
+        # 1. ouverture (gaps)
+        broker.on_quote(Quote(bar.time, bar.bid.open, bar.bid.open + spread))
 
-        for i, bar in enumerate(bars):
-            trading = trade_start is None or bar.time >= trade_start
-            if trading and initial_equity is None:
-                initial_equity = broker.equity_eur()
-            spread = settings.costs.default_spread_points if bar.spread is None else bar.spread
-            if i > 0 and bar.time - bars[i - 1].time > step:
-                interruptions.append((bars[i - 1].time + step, bar.time))
+        # 2. ordres en attente
+        if self.pending is not None and self.pending_rec is not None:
+            outcome = self._execute(self.pending, bar, self.pending_rec[1])
+            self.decisions.append(DecisionRecord(self.pending_rec[1], self.pending_rec[0], self.pending, outcome, bar.time))
+            self.pending, self.pending_rec = None, None
 
-            # 1. ouverture (gaps)
-            broker.on_quote(Quote(bar.time, bar.bid.open, bar.bid.open + spread))
+        # 3. vie de la bougie
+        broker.on_bar(bar.bid, spread, tf.minutes)
+        if broker.positions:
+            self.exposure_bars += 1
+        assert self.mtf is not None
+        self.mtf.update(bar.bid)
+        now = bar.time + step
+        self.equity_curve.append((now, broker.equity_eur()))
 
-            # 2. ordres en attente
-            if pending is not None and pending_rec is not None:
-                outcome = self._execute(broker, pending, bar, trading, info, pending_rec[1])
-                decisions.append(DecisionRecord(pending_rec[1], pending_rec[0], pending, outcome, bar.time))
-                pending, pending_rec = None, None
-
-            # 3. vie de la bougie
-            broker.on_bar(bar.bid, spread, tf.minutes)
-            if broker.positions:
-                exposure_bars += 1
-            mtf.update(bar.bid)
-            now = bar.time + step
-            equity_curve.append((now, broker.equity_eur()))
-
-            # 4. décision à la clôture
-            ctx = BarContext(
-                index=i,
-                bar=bar,
-                now=now,
-                history=CausalHistory(bars, i),
-                pit=PointInTimeView(self.pit, now),
-                mtf=mtf,
-                positions=tuple(replace(p, meta=dict(p.meta)) for p in broker.positions.values()),
-                equity_eur=broker.equity_eur(),
-                balance_eur=broker.balance_eur,
-                trading_enabled=trading,
-            )
-            decision = strategy.on_bar(ctx)
-            if decision is None:
-                decision = Decision.no_trade("None")
-            if not trading or i == len(bars) - 1:
-                continue
+        # 4. décision à la clôture
+        ctx = BarContext(
+            index=i,
+            bar=bar,
+            now=now,
+            history=_OffsetHistory(self.bars, self.offset),
+            pit=PointInTimeView(self.pit, now),
+            mtf=self.mtf,
+            positions=tuple(replace(p, meta=dict(p.meta)) for p in broker.positions.values()),
+            equity_eur=broker.equity_eur(),
+            balance_eur=broker.balance_eur,
+            trading_enabled=trading,
+        )
+        decision = self.strategy.on_bar(ctx)
+        if decision is None:
+            decision = Decision.no_trade("None")
+        if trading and decide:
             if decision.action in (Action.LONG, Action.CLOSE):
-                pending, pending_rec = decision, (i, now)
+                self.pending, self.pending_rec = decision, (i, now)
             elif decision.action == Action.HOLD and decision.stop_level is not None:
                 raised = [broker.modify_stop(d, decision.stop_level) for d in list(broker.positions)]
-                decisions.append(DecisionRecord(now, i, decision, "STOP_RAISED" if any(raised) else "STOP_UNCHANGED", now))
+                self.decisions.append(DecisionRecord(now, i, decision, "STOP_RAISED" if any(raised) else "STOP_UNCHANGED", now))
             else:
-                decisions.append(DecisionRecord(now, i, decision, decision.action.value))
+                self.decisions.append(DecisionRecord(now, i, decision, decision.action.value))
+        return self.decisions[n_before:]
 
-        last = bars[-1]
-        if cfg.close_at_end:
-            for deal_id in list(broker.positions):
-                broker.close_position(deal_id, "END_OF_BACKTEST", when=last.time + step)
-            if equity_curve:
-                equity_curve[-1] = (equity_curve[-1][0], broker.equity_eur())
-
-        trades = []
-        for t in broker.closed_trades:
-            risk, d, when = info.get(t.deal_id, (0.0, Decision.no_trade(), None))
-            trades.append(TradeRecord(t, risk, d.setup, d.regime, d.bias, when))
-        return BacktestResult(
-            strategy=getattr(strategy, "name", type(strategy).__name__),
-            settings=settings,
-            timeframe=tf,
-            start=bars[0].time,
-            end=last.time + step,
-            trade_start=trade_start,
-            initial_equity_eur=initial_equity if initial_equity is not None else broker.equity_eur(),
-            final_equity_eur=broker.equity_eur(),
-            trades=trades,
-            equity_curve=[(t, e) for t, e in equity_curve if trade_start is None or t > trade_start],
-            decisions=decisions,
-            interruptions=interruptions,
-            halted=broker.risk.halted,
-            bars=len(bars),
-            exposure_bars=exposure_bars,
-            ledger=list(broker.ledger),
-        )
+    def trade_record(self, t: ClosedTrade) -> TradeRecord:
+        risk, d, when = self.info.get(t.deal_id, (0.0, Decision.no_trade(), None))
+        return TradeRecord(t, risk, d.setup, d.regime, d.bias, when)
 
     # -------------------------------------------------------------- exécution
-    def _execute(self, broker: SimulatedBroker, d: Decision, bar: Bar, trading: bool, info: dict, decided_at: datetime) -> str:
+    def _execute(self, d: Decision, bar: Bar, decided_at: datetime) -> str:
         cfg = self.config
+        broker = self.broker
         if d.action == Action.CLOSE:
             if not broker.positions:
                 return "NOTHING_TO_CLOSE"
@@ -421,5 +437,75 @@ class Backtester:
             return res.message
         p = res.position
         risk = (p.entry_price - p.stop_level + costs.guaranteed_stop_premium_points) * contract.value_per_point_eur(p.size, spec, broker.eurusd)
-        info[p.deal_id] = (risk, d, decided_at)
+        self.info[p.deal_id] = (risk, d, decided_at)
         return "FILLED"
+
+
+class _OffsetHistory(CausalHistory):
+    """``CausalHistory`` sur une fenêtre glissante (indices locaux, dernière bougie = instant courant)."""
+
+    __slots__ = ("offset",)
+
+    def __init__(self, bars: Sequence[Bar], offset: int) -> None:
+        super().__init__(bars, len(bars) - 1)
+        self.offset = offset
+
+
+class Backtester:
+    def __init__(self, config: BacktestConfig | None = None, pit: PointInTimeSource | None = None) -> None:
+        self.config = config or BacktestConfig()
+        if self.config.settings.mode != TradingMode.BACKTEST:
+            self.config = replace(self.config, settings=replace(self.config.settings, mode=TradingMode.BACKTEST))
+        self.pit = pit
+
+    def run(self, strategy: Strategy, bars: Sequence[Bar], trade_start: datetime | None = None) -> BacktestResult:
+        """Rejoue ``bars``. Avant ``trade_start``, la stratégie se préchauffe sans trader."""
+        cfg = self.config
+        settings = cfg.settings
+        if not bars:
+            raise ValueError("Aucune bougie")
+        tf = bars[0].timeframe
+        for a, b in zip(bars, bars[1:]):
+            if b.time <= a.time:
+                raise ValueError(f"Bougies non chronologiques : {a.time} puis {b.time}")
+            if b.timeframe != tf:
+                raise ValueError("Toutes les bougies doivent avoir le même timeframe")
+        step = timedelta(minutes=tf.minutes)
+
+        loop = EventLoop(cfg, strategy, self.pit)
+        broker = loop.broker
+        initial_equity: float | None = None
+        last_i = len(bars) - 1
+        for i, bar in enumerate(bars):
+            trading = trade_start is None or bar.time >= trade_start
+            if trading and initial_equity is None:
+                initial_equity = broker.equity_eur()
+            loop.step(bar, trading, decide=i != last_i)
+
+        equity_curve = loop.equity_curve
+        last = bars[-1]
+        if cfg.close_at_end:
+            for deal_id in list(broker.positions):
+                broker.close_position(deal_id, "END_OF_BACKTEST", when=last.time + step)
+            if equity_curve:
+                equity_curve[-1] = (equity_curve[-1][0], broker.equity_eur())
+
+        trades = [loop.trade_record(t) for t in broker.closed_trades]
+        return BacktestResult(
+            strategy=getattr(strategy, "name", type(strategy).__name__),
+            settings=settings,
+            timeframe=tf,
+            start=bars[0].time,
+            end=last.time + step,
+            trade_start=trade_start,
+            initial_equity_eur=initial_equity if initial_equity is not None else broker.equity_eur(),
+            final_equity_eur=broker.equity_eur(),
+            trades=trades,
+            equity_curve=[(t, e) for t, e in equity_curve if trade_start is None or t > trade_start],
+            decisions=loop.decisions,
+            interruptions=loop.interruptions,
+            halted=broker.risk.halted,
+            bars=len(bars),
+            exposure_bars=loop.exposure_bars,
+            ledger=list(broker.ledger),
+        )

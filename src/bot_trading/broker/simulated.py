@@ -191,6 +191,68 @@ class SimulatedBroker:
         self.closed_trades.append(trade)
         return trade
 
+    # ------------------------------------------------------------ persistance
+    def export_state(self) -> dict:
+        """État sérialisable en JSON (paper trading : reprise après redémarrage)."""
+
+        def iso(t: datetime | None) -> str | None:
+            return t.isoformat() if t is not None else None
+
+        q = self.last_quote
+        return {
+            "balance_eur": self.balance_eur,
+            "peak_equity_eur": self.peak_equity_eur,
+            "eurusd": self.eurusd,
+            "deal_seq": self._deal_seq,
+            "clock": iso(self._clock),
+            "last_quote": None if q is None else {"time": q.time.isoformat(), "bid": q.bid, "ask": q.ask},
+            "halted": self.risk.halted,
+            "kill_switch": self.risk.kill_switch,
+            "positions": [
+                {
+                    "deal_id": p.deal_id, "epic": p.epic, "direction": p.direction.value, "size": p.size,
+                    "entry_price": p.entry_price, "opened_at": p.opened_at.isoformat(), "stop_level": p.stop_level,
+                    "guaranteed_stop": p.guaranteed_stop, "margin_eur": p.margin_eur,
+                    "take_profit_level": p.take_profit_level, "funding_paid_eur": p.funding_paid_eur,
+                    "last_funding_at": iso(p.last_funding_at),
+                    "meta": {k: v for k, v in p.meta.items() if isinstance(v, (str, int, float, bool, type(None)))},
+                }
+                for p in self.positions.values()
+            ],
+        }
+
+    def restore_state(self, state: dict) -> None:
+        """Recharge ``export_state``. Un compte verrouillé (drawdown, kill switch) le reste."""
+
+        def dt(v: str | None) -> datetime | None:
+            return datetime.fromisoformat(v) if v else None
+
+        self.balance_eur = float(state["balance_eur"])
+        self.peak_equity_eur = float(state["peak_equity_eur"])
+        self.eurusd = float(state.get("eurusd") or self.eurusd)
+        self._deal_seq = int(state.get("deal_seq", 0))
+        self._clock = dt(state.get("clock"))
+        q = state.get("last_quote")
+        self.last_quote = None if not q else Quote(datetime.fromisoformat(q["time"]), float(q["bid"]), float(q["ask"]))
+        self.positions = {}
+        for d in state.get("positions", []):
+            p = Position(
+                deal_id=d["deal_id"], epic=d["epic"], direction=Direction(d["direction"]), size=float(d["size"]),
+                entry_price=float(d["entry_price"]), opened_at=datetime.fromisoformat(d["opened_at"]),
+                stop_level=float(d["stop_level"]), guaranteed_stop=bool(d["guaranteed_stop"]),
+                margin_eur=float(d["margin_eur"]),
+                take_profit_level=None if d.get("take_profit_level") is None else float(d["take_profit_level"]),
+                funding_paid_eur=float(d.get("funding_paid_eur", 0.0)), last_funding_at=dt(d.get("last_funding_at")),
+                meta=dict(d.get("meta") or {}),
+            )
+            if p.direction != Direction.BUY:
+                raise ValueError("Position courte dans l'état sauvegardé : refusée")
+            self.positions[p.deal_id] = p
+        # Le verrou de drawdown ne se lève qu'avec une confirmation humaine : on le
+        # recharge sous forme de kill switch (même effet : aucun nouvel ordre).
+        if state.get("halted") or state.get("kill_switch"):
+            self.risk.engage_kill_switch()
+
     # --------------------------------------------------------- marché
     def on_quote(self, quote: Quote) -> None:
         """Cotation tick : vérifie stops/TP au prix courant puis met à jour l'état."""

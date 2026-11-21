@@ -13,7 +13,9 @@ Commandes :
   format du dashboard ;
 - ``dashboard`` : lance le dashboard Streamlit en lecture seule (``--demo`` pour
   des données synthétiques) ;
-- ``kill-switch`` : affiche, engage ou lève (confirmation humaine) le kill switch.
+- ``kill-switch`` : affiche, engage ou lève (confirmation humaine) le kill switch ;
+- ``paper`` : paper trading local sur les bougies réelles (``run``, ``status``,
+  ``reset``). Ordres simulés uniquement.
 
 Il n'existe aucune commande d'exécution réelle.
 """
@@ -240,6 +242,78 @@ def cmd_kill_switch(args, settings: Settings) -> int:
     return 0
 
 
+def cmd_paper(args) -> int:
+    """Paper trading : moteur de décision sur bougies réelles, broker simulé, aucun ordre réel."""
+    import json
+    from datetime import timedelta
+    from pathlib import Path
+
+    from bot_trading.core.models import Timeframe
+    from bot_trading.marketdata.common import load_dotenv
+
+    runtime = Path(args.runtime_dir)
+    if args.paper_cmd == "status":
+        p = runtime / "account.json"
+        if not p.exists():
+            print(f"Aucun compte paper dans {runtime} (lancer : python -m bot_trading paper run)")
+            return 0
+        a = json.loads(p.read_text(encoding="utf-8"))
+        pos = json.loads((runtime / "positions.json").read_text(encoding="utf-8")) if (runtime / "positions.json").exists() else []
+        print(f"Mode paper (aucun ordre réel) · {a.get('timeframe', '?')} · mis à jour {a.get('updated_at')}")
+        print(f"Equity {a['equity_eur']:.2f} € · solde {a.get('balance_eur', 0):.2f} € · plus haut {a.get('peak_equity_eur', 0):.2f} €")
+        print(f"Dernière bougie {a.get('last_bar_time')} · ordre en attente {a.get('pending_order') or 'aucun'} · kill switch {'ENGAGÉ' if a.get('kill_switch') else 'inactif'}")
+        for x in pos:
+            print(f"  {x['deal_id']} {x['size']:g} lot @ {x['entry_price']:.1f} stop {x['stop_level']:.1f} P&L latent {x.get('unrealized_pnl_eur') or 0:.2f} €")
+        return 0
+    if args.paper_cmd == "reset":
+        from bot_trading.paper.trader import archive_runtime
+        from bot_trading.risk.kill_switch import CONFIRMATION
+
+        if args.confirm != CONFIRMATION:
+            print(f"Archivage du compte paper refusé : ajouter --confirm {CONFIRMATION}", file=sys.stderr)
+            return 1
+        dest = archive_runtime(runtime)
+        print(f"Compte paper archivé dans {dest}" if dest else "Rien à archiver.")
+        return 0
+
+    from bot_trading.marketdata.engine import DataEngine
+    from bot_trading.marketdata.storage import ParquetStore
+    from bot_trading.paper import PaperConfig, PaperTrader, StoreBarFeed
+
+    load_dotenv(args.env)
+    settings = Settings.from_env()
+    tf = Timeframe(args.timeframe)
+    store = ParquetStore(args.store_dir)
+    feed = StoreBarFeed(store, settings.instrument.epic, tf, tuple(args.sources))
+    cfg = PaperConfig(runtime_dir=runtime, timeframe=tf, risk_fraction=args.risk, warmup=timedelta(days=args.warmup_days))
+    trader = PaperTrader(feed, settings, cfg)
+    refresher = None
+    if args.refresh_capital:
+        from bot_trading.paper.feeds import CapitalRefresher
+
+        refresher = CapitalRefresher(DataEngine(store), settings.instrument.epic, (tf,))
+
+    def report(r) -> None:
+        print(f"[{r.time:%Y-%m-%d %H:%M:%S} UTC] {r.message}")
+        for d in r.decisions:
+            print(f"    {d.time:%Y-%m-%d %H:%M} {d.decision.action.value:8} {d.outcome[:28]:28} {d.decision.reason[:100]}")
+
+    print("Paper trading : ordres SIMULÉS uniquement (aucun ordre réel n'existe dans ce dépôt).")
+    try:
+        trader.run(
+            interval_seconds=args.interval,
+            max_cycles=1 if args.once else None,
+            before_cycle=refresher.refresh if refresher else None,
+            on_report=report,
+        )
+    except KeyboardInterrupt:
+        print("Arrêt demandé : état sauvegardé après chaque bougie.")
+    finally:
+        if refresher:
+            refresher.close()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="bot_trading")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -278,7 +352,25 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--reset", action="store_true")
     ks.add_argument("--reason", default="")
     ks.add_argument("--confirm", default="", help="JE_CONFIRME_LA_REPRISE pour --reset")
+    pp = sub.add_parser("paper", help="paper trading local (ordres simulés)")
+    psub = pp.add_subparsers(dest="paper_cmd", required=True)
+    pr = psub.add_parser("run", help="boucle de paper trading")
+    pr.add_argument("--once", action="store_true", help="un seul cycle (planificateur externe)")
+    pr.add_argument("--interval", type=float, default=60.0, help="secondes entre deux cycles")
+    pr.add_argument("--timeframe", default="H1", choices=["M15", "H1"])
+    pr.add_argument("--risk", type=float, default=0.10, help="fraction de risque de base (R9)")
+    pr.add_argument("--warmup-days", type=int, default=400)
+    pr.add_argument("--sources", nargs="+", default=["capital"], help="datasets de bougies lus dans le store")
+    pr.add_argument("--refresh-capital", action="store_true", help="collecte Capital.com (lecture seule) avant chaque cycle")
+    pr.add_argument("--store-dir", default="data/store")
+    pr.add_argument("--env", default=".env")
+    psub.add_parser("status", help="compte, positions, kill switch")
+    prs = psub.add_parser("reset", help="archive le compte paper et repart de zéro")
+    prs.add_argument("--confirm", default="")
+    pp.add_argument("--runtime-dir", default="data/runtime")
     args = parser.parse_args(argv)
+    if args.cmd == "paper":
+        return cmd_paper(args)
     if args.cmd == "backtest":
         return cmd_backtest(args)
     if args.cmd == "decisions":

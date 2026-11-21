@@ -31,6 +31,7 @@ l'entrée. L'absence d'opportunité conduit à `NO_TRADE`.
 | Decision Engine (LONG, HOLD, CLOSE, NO_TRADE) avec pré-contrôle du Risk Engine | `bot_trading.strategy.decision_engine` | ✅ (données synthétiques) |
 | Gestion des positions swing (sorties, remontée du stop garanti) | `bot_trading.strategy.positions` | ✅ (données synthétiques) |
 | Dashboard de suivi en lecture seule (Streamlit) + kill switch persistant | `bot_trading.dashboard`, `bot_trading.risk.kill_switch` | ✅ |
+| Paper trading local (même boucle que le backtest, état persistant, ordres simulés) | `bot_trading.paper` | ✅ (testé sur données synthétiques, à lancer sur les prix réels) |
 | Boucles d'amélioration | — | à venir |
 
 ## Démarrage rapide
@@ -56,6 +57,40 @@ python -m bot_trading.marketdata health
 Les données sont écrites dans `data/store/` (ignoré par git), une table Parquet
 par jeu de données et par année, plus `data/store/_lineage.jsonl` qui trace
 chaque collecte (source, URL sans clé, heure, empreinte SHA-256, licence).
+
+## Paper trading
+
+Le Decision Engine tourne sur les bougies **closes** de Capital.com ; les ordres
+vont au broker simulé (spread bid/ask, stop garanti, financement overnight,
+marge, Risk Engine). Aucun ordre réel n'existe dans ce dépôt.
+
+```bash
+# 1. Historique pour le préchauffage (EMA 200 D1 : ≥ 300 jours) puis boucle.
+python -m bot_trading.marketdata refresh capital --timeframes H1 --days 400
+python -m bot_trading paper run --refresh-capital          # cycle toutes les 60 s, Ctrl+C pour arrêter
+python -m bot_trading paper run --once                     # un seul cycle (cron, planificateur)
+python -m bot_trading paper status                         # compte, positions, kill switch
+python -m bot_trading paper reset --confirm JE_CONFIRME_LA_REPRISE   # archive le compte et repart de 20 €
+```
+
+- **Même code que le backtest** : chaque bougie passe par `EventLoop.step`
+  (décision à la clôture, exécution à l'ouverture suivante). Un test vérifie que
+  le paper reproduit exactement les trades du backtest, y compris après un
+  redémarrage en pleine position.
+- **Reprise** : l'état (`data/runtime/paper_state.json`) est sauvegardé après
+  chaque bougie ; au redémarrage la stratégie se préchauffe sur l'historique
+  sans toucher au compte, puis les bougies manquées sont rejouées dans l'ordre.
+- **Fondamental dominant** : la vue fondamentale vient de `data/runtime/regime.json`
+  (Market Regime Engine). Absente, périmée (> 48 h), de démonstration ou publiée
+  après l'instant de décision ⇒ `NO_TRADE`. Régime défavorable : entrées bloquées
+  et taille réduite ; position ouverte en `RISK_OFF` : stop resserré, pas de clôture forcée.
+- **Kill switch** : rechargé avant chaque bougie ; engagé, il bloque toute
+  nouvelle entrée (veto `KILL_SWITCH`), les stops garantis restent en place.
+  Drawdown max (R16) ⇒ kill switch persistant, reprise manuelle. Après
+  `kill-switch --reset`, relancer la boucle.
+- Publication pour le dashboard : `account.json`, `positions.json`,
+  `equity.jsonl`, `trades.jsonl`, `decisions.jsonl` (y compris les `NO_TRADE`
+  et leur étage), `risk_events.jsonl`, `heartbeat.json`.
 
 ## Dashboard de suivi
 

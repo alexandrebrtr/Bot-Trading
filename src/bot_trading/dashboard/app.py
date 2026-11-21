@@ -93,6 +93,9 @@ def tab_portfolio(reader: RuntimeReader, settings: Settings, tz: ZoneInfo, now: 
     s = views.portfolio_summary(account, curve, settings.risk)
     fresh = views.account_freshness(account, now)
     st.caption(f"Mode **{account.mode}** · mis à jour {local(account.updated_at, tz)} · {fresh}")
+    paper = views.paper_status(reader.read_json("account.json"))
+    if paper:
+        st.caption(paper)
     c = st.columns(4)
     c[0].metric("Equity", fmt_eur(s.equity_eur), fmt_eur(s.net_pnl_eur))
     note_metric(c[1], "Performance nette", fmt_pct(s.net_return, signed=True), f"depuis {fmt_eur(s.initial_capital_eur)}")
