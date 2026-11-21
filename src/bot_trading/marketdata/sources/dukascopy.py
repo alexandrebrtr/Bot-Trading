@@ -92,6 +92,10 @@ class DukascopySource:
 
     def fetch(self, start: date, end: date, tf: Timeframe = Timeframe.M5) -> tuple[list[dict], Provenance]:
         """Bougies ``tf`` (M5 à D1) agrégées depuis les minutes, closes uniquement."""
+        return self.fetch_many(start, end, [tf])[tf]
+
+    def fetch_many(self, start: date, end: date, tfs) -> dict:
+        """Comme ``fetch`` pour plusieurs timeframes, en ne téléchargeant les minutes qu'une fois."""
         now = self.clock()
         bid_all: list[Candle] = []
         ask_all: list[Candle] = []
@@ -102,11 +106,15 @@ class DukascopySource:
             bid_all += b
             ask_all += a
             digest.append(sha256_bytes(rb + ra))
-        # resample n'émet la dernière bougie que si elle est complète.
-        bid_tf = resample(bid_all, tf)
-        ask_tf = resample(ask_all, tf)
-        records = closed_only(merge_sides(self.epic, tf, bid_tf, ask_tf), now)
-        prov = Provenance(
+        out = {}
+        for tf in tfs:
+            # resample n'émet la dernière bougie que si elle est complète.
+            records = closed_only(merge_sides(self.epic, tf, resample(bid_all, tf), resample(ask_all, tf)), now)
+            out[tf] = (records, self._prov(tf, start, end, now, digest))
+        return out
+
+    def _prov(self, tf, start, end, now, digest) -> Provenance:
+        return Provenance(
             source=SOURCE,
             dataset=candles_dataset(SOURCE, self.epic, tf),
             url=f"{BASE}/{self.symbol}",
@@ -115,4 +123,3 @@ class DukascopySource:
             payload_sha256=sha256_bytes("".join(digest).encode()),
             license_note=LICENSE,
         )
-        return records, prov

@@ -89,7 +89,12 @@ def cmd_backtest(args) -> int:
     config = BacktestConfig(settings=settings, default_risk_fraction=args.risk, max_margin_fraction=0.5)
     tf = Timeframe(args.timeframe)
     pit = None
-    if args.csv:
+    holdout_note = None
+    if args.store:
+        bars, pit, holdout_note = _store_backtest_data(args, settings, tf)
+        if not bars:
+            return 1
+    elif args.csv:
         bars = CsvPriceSource(args.csv, tf).get_bars(settings.instrument.epic, tf)
         print("Données : CSV (aucun biais fondamental point-in-time fourni : stratégies fondamentales non évaluées)")
     else:
@@ -113,7 +118,9 @@ def cmd_backtest(args) -> int:
     print(metrics_table(results))
 
     if args.walk_forward:
-        folds, holdout = walk_forward_folds(bars[0].time, bars[-1].time, args.train_months, args.test_months, args.test_months, args.holdout_months)
+        # Mode store : la réserve est déjà retirée de ``bars`` (jamais lue ici).
+        hold_m = 0 if args.store else args.holdout_months
+        folds, holdout = walk_forward_folds(bars[0].time, bars[-1].time, args.train_months, args.test_months, args.test_months, hold_m)
         if not folds:
             print("Walk-forward : historique trop court pour une fenêtre.")
             return 0
@@ -135,7 +142,62 @@ def cmd_backtest(args) -> int:
                 print(f"  {k}: {v}")
         if holdout:
             print(f"Réserve finale non ouverte : {holdout[0].date()} → {holdout[1].date()}")
+    if holdout_note:
+        print(holdout_note)
     return 0
+
+
+def _store_backtest_data(args, settings, tf):
+    """Bougies réelles du store (avant la réserve finale) et régime point-in-time recalculé jour par jour."""
+    from dataclasses import replace
+    from datetime import datetime, timedelta, timezone
+
+    from bot_trading.backtest.validation import add_months
+    from bot_trading.marketdata.pit import regime_history, regime_observations
+    from bot_trading.marketdata.source import InMemoryPointInTimeSource
+    from bot_trading.marketdata.storage import ParquetStore
+    from bot_trading.paper.feeds import StoreBarFeed
+    from bot_trading.paper.regime import data_coverage
+
+    store = ParquetStore(args.store)
+    start = datetime.fromisoformat(args.start).replace(tzinfo=timezone.utc) if args.start else None
+    feed = StoreBarFeed(store, settings.instrument.epic, tf, [s.strip() for s in args.source.split(",") if s.strip()])
+    bars = feed.bars(start, datetime.now(timezone.utc))
+    if not bars:
+        print(f"Aucune bougie {tf.value} dans {args.store} pour {args.source}.", file=sys.stderr)
+        return [], None, None
+    last_close = bars[-1].time + timedelta(minutes=tf.minutes)
+    holdout_start = add_months(last_close, -args.holdout_months) if args.holdout_months else last_close
+    kept = [b for b in bars if b.time < holdout_start]
+    floor = settings.costs.default_spread_points
+    if args.spread == "capital":
+        # Coût Capital.com : jamais moins que le spread par défaut du broker simulé.
+        kept = [replace(b, spread=max(floor, b.spread or 0.0)) for b in kept]
+    print(f"Données : RÉELLES, {feed.last_source}, {len(kept)} bougies du {kept[0].time:%Y-%m-%d} au {holdout_start:%Y-%m-%d} "
+          f"(spread {'max(source, ' + str(floor) + ' pts)' if args.spread == 'capital' else 'de la source'}).")
+    note = (f"Réserve finale non ouverte : {holdout_start:%Y-%m-%d} → {last_close:%Y-%m-%d} "
+            f"({len(bars) - len(kept)} bougies jamais lues par le backtest)") if args.holdout_months else None
+    if args.no_fundamental:
+        print("Fondamental désactivé (--no-fundamental) : stratégies fondamentales non évaluées.")
+        return kept, None, note
+    n = [0]
+
+    def progress(t, a):
+        n[0] += 1
+        if n[0] % 250 == 0:
+            print(f"  régime {t:%Y-%m-%d} : {a.regime.value}", flush=True)
+
+    print("Régime point-in-time : une évaluation par jour à 21:00 UTC (peut prendre quelques minutes)…", flush=True)
+    hist = regime_history(store, kept[0].time, holdout_start, cache_path=args.regime_cache, progress=progress)
+    if hist:
+        from collections import Counter
+
+        cov = Counter(data_coverage(a) for a in hist)
+        regs = Counter(a.regime.value for a in hist)
+        allowed = sum(a.allow_new_entries for a in hist)
+        print(f"  {len(hist)} évaluations : {dict(regs)} ; entrées autorisées {allowed / len(hist):.0%} des jours")
+        print(f"  couverture (macro, intermarchés) la plus fréquente : {cov.most_common(1)[0][0]}")
+    return kept, InMemoryPointInTimeSource(regime_observations(hist)), note
 
 
 def cmd_decisions(args) -> int:
@@ -494,6 +556,12 @@ def main(argv: list[str] | None = None) -> int:
     bt.add_argument("--train-months", type=int, default=24)
     bt.add_argument("--test-months", type=int, default=6)
     bt.add_argument("--holdout-months", type=int, default=12)
+    bt.add_argument("--store", help="données RÉELLES : dossier du store Parquet (ex. data/store)")
+    bt.add_argument("--source", default="dukascopy,capital", help="sources de bougies du store, par ordre de préférence")
+    bt.add_argument("--start", help="début (AAAA-MM-JJ), mode --store")
+    bt.add_argument("--spread", choices=["capital", "source"], default="capital", help="mode --store : coût Capital.com (défaut) ou spread de la source")
+    bt.add_argument("--regime-cache", help="mode --store : JSONL des régimes déjà calculés (réutilisés)")
+    bt.add_argument("--no-fundamental", action="store_true", help="mode --store : techniques et benchmarks seulement")
     dc = sub.add_parser("decisions")
     dc.add_argument("--timeframe", default="H1", choices=["M5", "M15", "H1"])
     dc.add_argument("--years", type=int, default=2)

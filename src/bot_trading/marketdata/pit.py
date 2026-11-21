@@ -9,7 +9,7 @@ Correspondances :
 
 | Demande | Dataset | Repli |
 |---|---|---|
-| ``series(id)`` FRED | ``macro.fred.<id>`` (dernière vintage par période) | VIX : ``market.cboe.vix`` ; DGS2/DGS10 : ``rates.treasury.par_curve`` |
+| ``series(id)`` FRED | ``macro.fred.<id>`` (dernière vintage par période) | ``macro.fredgraph.<id>`` (sans clé, si pas de vintages) ; VIX : ``market.cboe.vix`` ; DGS2/DGS10 : ``rates.treasury.par_curve`` |
 | ``fed_communications`` | ``news.fed_rss`` (communiqués FOMC, minutes, discours, témoignages) | — |
 | ``scheduled_events`` | ``macro.fred.release_calendar`` (CPI, NFP, PCE, PIB, ventes au détail, FOMC si listé) | événements manuels (``extra_events``) |
 | ``earnings`` | ``fundamentals.edgar.facts`` (via ``ticker_ciks``) | — |
@@ -107,12 +107,17 @@ class StorePITData:
     # ------------------------------------------------------------ séries
     def series(self, series_id: str, asof: datetime) -> list[Observation]:
         rows = [r for r in self._read(f"macro.fred.{series_id.lower()}") if r["available_at"] <= asof and r.get("value") is not None]
+        tag = "ALFRED"
+        if not rows and not self._has(f"macro.fred.{series_id.lower()}"):
+            # Repli sans clé : export fredgraph (dernière vintage, publication estimée prudemment).
+            rows = [r for r in self._read(f"macro.fredgraph.{series_id.lower()}") if r["available_at"] <= asof and r.get("value") is not None]
+            tag = "FREDGRAPH"
         if rows:
             latest: dict[date, dict] = {}
             for r in sorted(rows, key=lambda r: r["available_at"]):
                 latest[_day(r["observation_date"])] = r
             return [
-                Observation(series_id, d, float(r["value"]), r["available_at"], f"ALFRED:{series_id}")
+                Observation(series_id, d, float(r["value"]), r["available_at"], f"{tag}:{series_id}")
                 for d, r in sorted(latest.items())
             ]
         fb = _FRED_FALLBACK.get(series_id)
@@ -210,3 +215,80 @@ def floor_time(t: datetime, minutes: int) -> datetime:
     base = t.replace(second=0, microsecond=0)
     total = base.hour * 60 + base.minute
     return base.replace(hour=0, minute=0) + timedelta(minutes=total - total % minutes)
+
+
+# ------------------------------------------------------------------ historique (backtest)
+
+
+def regime_history(
+    store,
+    start: datetime,
+    end: datetime,
+    every: timedelta = timedelta(days=1),
+    hour_utc: int = 21,
+    cache_path=None,
+    progress=None,
+    **kw,
+) -> list:
+    """Régimes évalués à pas fixe sur ``[start, end)`` (21:00 UTC : après la clôture cash US).
+
+    Chaque évaluation ne voit que les données publiées à son ``asof`` (StorePITData)
+    et passe par ``guard_coverage`` comme en paper trading. ``cache_path`` (JSONL) :
+    les ``asof`` déjà présents sont relus au lieu d'être recalculés ; à vider si le
+    store a changé.
+    """
+    import json
+    from pathlib import Path
+
+    from bot_trading.config import TradingMode
+    from bot_trading.intelligence.regime import MarketRegimeEngine
+    from bot_trading.intelligence.schemas import RegimeAssessment
+    from bot_trading.paper.regime import guard_coverage
+
+    cached: dict[datetime, RegimeAssessment] = {}
+    path = Path(cache_path) if cache_path else None
+    if path is not None and path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                a = RegimeAssessment.model_validate(json.loads(line))
+            except ValueError:
+                continue
+            cached[a.asof] = a
+    engine = MarketRegimeEngine(StorePITData(store, **kw), mode=TradingMode.PAPER)
+    t = start.replace(hour=hour_utc, minute=0, second=0, microsecond=0)
+    if t < start:
+        t += timedelta(days=1)
+    out: list = []
+    fresh: list = []
+    previous = None
+    while t < end:
+        a = cached.get(t)
+        if a is None:
+            a = guard_coverage(engine.assess(t, previous))
+            fresh.append(a)
+        out.append(a)
+        previous = a.regime
+        if progress is not None:
+            progress(t, a)
+        t += every
+    if path is not None and fresh:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            for a in fresh:
+                f.write(json.dumps(a.model_dump(mode="json")) + "\n")
+    return out
+
+
+def regime_observations(assessments) -> list:
+    """Séries point-in-time du backtest : évaluation complète, régime et biais, publiés à ``asof``."""
+    from bot_trading.marketdata.source import Observation as PITObservation
+    from bot_trading.strategy.fundamental import SERIES_ASSESSMENT, SERIES_BIAS, SERIES_REGIME, normalize_bias, normalize_regime
+
+    out = []
+    for a in assessments:
+        out.append(PITObservation(SERIES_ASSESSMENT, a.asof, a, a.asof, "regime_engine"))
+        out.append(PITObservation(SERIES_REGIME, a.asof, normalize_regime(a.regime), a.asof, "regime_engine"))
+        # Biais exploitable seulement si les entrées sont autorisées (couverture, F10, F11).
+        bias = normalize_bias(a.bias) if a.allow_new_entries else ("bearish" if normalize_regime(a.regime) == "RISK_OFF" else "neutral")
+        out.append(PITObservation(SERIES_BIAS, a.asof, bias, a.asof, "regime_engine"))
+    return out
