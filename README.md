@@ -44,6 +44,7 @@ python -m bot_trading status
 python -m bot_trading replay chemin/vers/bougies_m5.csv
 python -m bot_trading backtest --years 4 --walk-forward   # données SYNTHÉTIQUES
 python -m bot_trading backtest --csv bougies_h1_bid.csv --timeframe H1
+python -m bot_trading backtest --store data/store --walk-forward     # données RÉELLES du store (voir plus bas)
 python -m bot_trading decisions --timeframe M15 --years 2 --out decisions.jsonl   # journal de décision
 
 # Data Engine (réseau + .env) : collecte puis contrôle de fraîcheur
@@ -53,6 +54,25 @@ python -m bot_trading.marketdata refresh dukascopy --timeframes M5 --days 365
 python -m bot_trading.marketdata refresh edgar
 python -m bot_trading.marketdata health
 ```
+
+### Backtest sur l'historique réel (sources gratuites, sans clé)
+
+```bash
+# Prix US500 (Dukascopy, minutes agrégées, par tranches d'un mois) et fondamental.
+python -m bot_trading.marketdata refresh dukascopy --timeframes H1 --start 2018-01-01
+python -m bot_trading.marketdata refresh fred-graph vix treasury fed-rss   # fred si FRED_API_KEY est dans .env
+# Comparaison des 7 stratégies + walk-forward, réserve des 12 derniers mois jamais lue.
+python -m bot_trading backtest --store data/store --timeframe H1 --walk-forward --regime-cache data/backtest/regimes.jsonl
+```
+
+`--store` lit les bougies closes du store, retire la réserve finale **avant**
+tout calcul, puis recalcule le régime une fois par jour (21:00 UTC) avec le
+Market Regime Engine sur les seules données publiées à cet instant. Le spread
+appliqué est le plus grand du spread de la source et du spread Capital.com du
+broker simulé (`--spread source` pour l'inverse). `fred-graph` (export public
+sans clé) n'a pas les vintages : valeurs révisées et dates de publication
+estimées prudemment (toujours plus tard que la réalité), sans calendrier
+d'annonces. Avec `FRED_API_KEY`, préférer `fred` (ALFRED, vraies vintages).
 
 Les données sont écrites dans `data/store/` (ignoré par git), une table Parquet
 par jeu de données et par année, plus `data/store/_lineage.jsonl` qui trace
