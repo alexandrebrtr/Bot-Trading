@@ -31,6 +31,7 @@ l'entrée. L'absence d'opportunité conduit à `NO_TRADE`.
 | Decision Engine (LONG, HOLD, CLOSE, NO_TRADE) avec pré-contrôle du Risk Engine | `bot_trading.strategy.decision_engine` | ✅ (données synthétiques) |
 | Gestion des positions swing (sorties, remontée du stop garanti) | `bot_trading.strategy.positions` | ✅ (données synthétiques) |
 | Dashboard de suivi en lecture seule (Streamlit) + kill switch persistant | `bot_trading.dashboard`, `bot_trading.risk.kill_switch` | ✅ |
+| Paper trading local (même boucle que le backtest, état persistant, ordres simulés, régime automatique, alertes Telegram) | `bot_trading.paper`, `bot_trading.marketdata.pit`, `bot_trading.notify` | ✅ (testé sur données synthétiques, à lancer sur les prix réels) |
 | Boucles d'amélioration | — | à venir |
 
 ## Démarrage rapide
@@ -56,6 +57,56 @@ python -m bot_trading.marketdata health
 Les données sont écrites dans `data/store/` (ignoré par git), une table Parquet
 par jeu de données et par année, plus `data/store/_lineage.jsonl` qui trace
 chaque collecte (source, URL sans clé, heure, empreinte SHA-256, licence).
+
+## Paper trading
+
+Le Decision Engine tourne sur les bougies **closes** de Capital.com ; les ordres
+vont au broker simulé (spread bid/ask, stop garanti, financement overnight,
+marge, Risk Engine). Aucun ordre réel n'existe dans ce dépôt.
+
+```bash
+# 1. Données : prix (préchauffage EMA 200 D1 : ≥ 300 jours) et fondamental.
+python -m bot_trading.marketdata refresh capital --timeframes H1 --days 400
+python -m bot_trading.marketdata refresh fred fed-rss vix treasury
+python -m bot_trading regime                                # régime calculé sur ces données (diagnostic)
+# 2. Boucle : collecte Capital.com, régime recalculé chaque heure, décision à chaque bougie close.
+python -m bot_trading paper run --refresh-capital          # cycle toutes les 60 s, Ctrl+C pour arrêter
+python -m bot_trading paper run --once                     # un seul cycle (cron, planificateur)
+python -m bot_trading paper status                         # compte, positions, kill switch
+python -m bot_trading paper compare --journal TJ_2026.xlsx # comparaison avec vos trades manuels
+python -m bot_trading paper reset --confirm JE_CONFIRME_LA_REPRISE   # archive le compte et repart de 20 €
+```
+
+Les séries FRED/RSS Fed ne se rafraîchissent pas dans la boucle : relancer
+`marketdata refresh fred fed-rss vix treasury` une fois par jour (cron).
+
+- **Même code que le backtest** : chaque bougie passe par `EventLoop.step`
+  (décision à la clôture, exécution à l'ouverture suivante). Un test vérifie que
+  le paper reproduit exactement les trades du backtest, y compris après un
+  redémarrage en pleine position.
+- **Reprise** : l'état (`data/runtime/paper_state.json`) est sauvegardé après
+  chaque bougie ; au redémarrage la stratégie se préchauffe sur l'historique
+  sans toucher au compte, puis les bougies manquées sont rejouées dans l'ordre.
+- **Fondamental dominant** : `paper run` recalcule `data/runtime/regime.json`
+  chaque heure avec le Market Regime Engine sur les données du store
+  (`marketdata/pit.py`) et l'archive dans `regime_history.jsonl`. Moins de 2
+  composantes macro ou aucune composante intermarchés ⇒ entrées bloquées.
+  Régime absent, périmé (> 48 h), de démonstration ou publié après l'instant de
+  décision ⇒ `NO_TRADE` (`--no-regime` si le régime est produit ailleurs). Régime défavorable : entrées bloquées
+  et taille réduite ; position ouverte en `RISK_OFF` : stop resserré, pas de clôture forcée.
+- **Kill switch** : rechargé avant chaque bougie ; engagé, il bloque toute
+  nouvelle entrée (veto `KILL_SWITCH`), les stops garantis restent en place.
+  Drawdown max (R16) ⇒ kill switch persistant, reprise manuelle. Après
+  `kill-switch --reset`, relancer la boucle.
+- **Alertes Telegram** (facultatives) : achat, clôture, veto d'un achat, kill
+  switch, arrêt sur drawdown, changement de régime, collecte en panne. Activées
+  seulement si `TELEGRAM_BOT_TOKEN` et `TELEGRAM_CHAT_ID` sont dans `.env`.
+- **Comparaison manuelle** : `paper compare` lit le journal (`TJ_*.xlsx`, trades
+  Live/SP500, `pip install openpyxl`) ou un CSV `date,direction,entry_price,exit_price,pnl`
+  et écrit `manual_comparison.json`.
+- Publication pour le dashboard : `account.json`, `positions.json`,
+  `equity.jsonl`, `trades.jsonl`, `decisions.jsonl` (y compris les `NO_TRADE`
+  et leur étage), `risk_events.jsonl`, `heartbeat.json`.
 
 ## Dashboard de suivi
 

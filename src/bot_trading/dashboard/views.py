@@ -158,3 +158,26 @@ def fmt_age(age: timedelta | None) -> str:
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def paper_status(account_raw: dict | None) -> str:
+    """Ligne d'état de la boucle de paper trading (champs ajoutés par ``paper.trader``)."""
+    if not isinstance(account_raw, dict) or account_raw.get("real_orders") is not False:
+        return ""
+    parts = ["Ordres **simulés** uniquement"]
+    if account_raw.get("timeframe"):
+        parts.append(f"base {account_raw['timeframe']}")
+    last = parse_time(account_raw.get("last_bar_time"))
+    parts.append(f"dernière bougie {last:%Y-%m-%d %H:%M} UTC" if last else "aucune bougie traitée")
+    if account_raw.get("feed"):
+        parts.append(f"source {account_raw['feed']}")
+    try:
+        upnl = float(account_raw.get("unrealized_pnl_eur") or 0.0)
+        parts.append(f"P&L latent {upnl:+.2f} €")
+    except (TypeError, ValueError):
+        pass
+    if account_raw.get("pending_order"):
+        parts.append(f"ordre en attente : {account_raw['pending_order']} à l'ouverture suivante")
+    if account_raw.get("kill_switch") or account_raw.get("halted"):
+        parts.append("🛑 kill switch engagé : aucun nouvel ordre")
+    return " · ".join(parts)

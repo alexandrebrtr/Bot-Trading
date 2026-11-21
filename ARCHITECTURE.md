@@ -76,6 +76,12 @@ Il n'existe **aucune flèche** vers un broker réel.
 | `intelligence/regime.py` | Market Regime Engine : `RISK_ON` / `NEUTRE` / `RISK_OFF`, autorisation d'entrée, multiplicateur de taille ≤ 1, fenêtres d'annonce. | macro, equity |
 | `intelligence/llm.py`, `guard.py` | LLM optionnel (OpenAI Responses), désactivé par défaut et en backtest ; protection contre l'injection et les fuites de secrets. | pydantic, requests |
 
+| `paper/trader.py` | `PaperTrader` : boucle de paper trading sur `EventLoop` (même code que le backtest), état persistant (`paper_state.json`), reprise et rattrapage, publication pour le dashboard, kill switch rechargé avant chaque bougie. | backtest, broker, risk, strategy, dashboard.runtime |
+| `paper/feeds.py` | `StoreBarFeed` (bougies closes du store, spread à la clôture), `CapitalRefresher` (collecte Capital.com en lecture seule), `InMemoryBarFeed` (tests). | marketdata |
+| `paper/regime.py` | `RuntimeRegimeProvider` : `FundamentalView` depuis `regime.json` (ou `regime_history.jsonl` au rattrapage), refusée si absente, périmée, de démo ou publiée après la décision ; `RegimePublisher` : calcul horaire depuis le store. | strategy.fundamental, intelligence, marketdata.pit |
+| `paper/compare.py` | Comparaison paper / trades manuels (journal `.xlsx` ou CSV). | dashboard.runtime |
+| `marketdata/pit.py` | `StorePITData` : `PointInTimeData` des agents d'analyse sur le store Parquet ; `assess_regime`. | intelligence, storage |
+| `notify/telegram.py` | Alertes Telegram facultatives, sens unique. | requests |
 | `risk/kill_switch.py` | Kill switch persistant (`data/runtime/kill_switch.json`) : engagé via `RiskEngine.engage_kill_switch`, rechargé par `apply(engine)`, reprise sur confirmation humaine ; fichier illisible = engagé. | risk |
 | `dashboard/runtime.py` | Lecture tolérante de l'état d'exécution (`data/runtime/*.json[l]`) et helpers d'écriture atomique pour les producteurs. | aucune |
 | `dashboard/decision_feed.py` | Interface `DecisionFeed` consommée par le dashboard ; `publish_decision` pour le moteur de décision. | core |
@@ -102,8 +108,8 @@ data/store/*.parquet   ──► market (as_of) ─┼──► app.py (Streamli
   Capital.com, ni aucune bibliothèque réseau (test AST `test_dashboard_cannot_send_orders_or_use_network`).
 - **Kill switch.** Le Risk Engine reste sans I/O ; `risk/kill_switch.py`
   persiste son état. Toute boucle qui appelle `check_order` doit d'abord
-  appeler `KillSwitchStore.apply(engine)` (la boucle de paper trading n'existe
-  pas encore : c'est le contrat qu'elle devra respecter).
+  appeler `KillSwitchStore.apply(engine)` (la boucle de paper trading le fait
+  avant chaque bougie).
 - **Graphiques causaux.** Les zones viennent de `FVGEngine` / `OrderBlockEngine`
   rejoués bougie par bougie ; une zone est datée de sa confirmation ; les
   timeframes agrégés n'émettent que des bougies closes à l'instant d'affichage.
@@ -296,3 +302,42 @@ Les valeurs suivantes sont dans `BrokerCosts` et doivent être recalées sur
 Les noms de champs de la réponse des prix (`snapshotTimeUTC`, `openPrice.bid`…)
 n'ont été lus que dans un résumé de la page : `parse_prices` devra être revalidé
 sur une réponse réelle.
+
+## Paper trading (`bot_trading.paper`)
+
+```
+Capital.com (GET /prices, lecture seule) ──► store Parquet (available_at)
+                                                │ StoreBarFeed : bougies closes à « maintenant »
+                                                ▼
+regime.json ──► RuntimeRegimeProvider ──► DecisionStrategy ──► EventLoop.step (backtest/engine.py)
+                                                                  │ SimulatedBroker + RiskEngine
+                                                                  ▼            ▲ KillSwitchStore.apply
+                         paper_state.json + account/positions/trades/decisions/equity/risk_events
+                                                                  │
+                                                                  ▼
+                                                     dashboard (lecture seule)
+```
+
+- `EventLoop` est le corps de la boucle du backtester, extrait pour être
+  appelé une bougie à la fois ; `Backtester.run` l'utilise aussi. Le paper
+  trading n'a donc aucune logique d'exécution propre.
+- Une bougie n'est traitée qu'une fois close (`available_at <= now`) ; la
+  décision prise à sa clôture est exécutée à l'ouverture de la suivante.
+- Au démarrage, la stratégie est préchauffée sur un broker jetable ; le compte
+  rechargé (solde, plus haut, positions, ordre en attente, stop d'ouverture)
+  n'est jamais modifié par le préchauffage.
+- Un état illisible ou d'un autre timeframe bloque le démarrage : `paper reset`
+  archive le compte (rien n'est supprimé).
+- Régime automatique : `marketdata/pit.py` (`StorePITData`) implémente
+  `PointInTimeData` sur le store (FRED/ALFRED par vintage, replis Cboe et
+  Trésor, RSS Fed → communications, calendrier FRED → événements, EDGAR →
+  résultats). `paper/regime.py` (`RegimePublisher`) évalue le régime à la
+  dernière clôture de bougie, chaque heure, et l'archive ; la couverture
+  minimale (2 composantes macro, 1 intermarchés) est exigée pour autoriser une
+  entrée. Un test vérifie que l'adaptateur reproduit l'évaluation du store en
+  mémoire des tests d'analyse.
+- Non collectés : pondérations de l'indice (licence SSGA), ISM, consensus ; les
+  dates FOMC ne viennent que du calendrier FRED s'il les liste.
+- Alertes : `notify/telegram.py`, en sens unique, désactivé sans
+  `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`, jamais bloquant, jeton jamais journalisé.
+- `paper/compare.py` : comparaison avec les trades manuels du journal.

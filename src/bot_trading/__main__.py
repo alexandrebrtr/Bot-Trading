@@ -14,6 +14,8 @@ Commandes :
 - ``dashboard`` : lance le dashboard Streamlit en lecture seule (``--demo`` pour
   des données synthétiques) ;
 - ``kill-switch`` : affiche, engage ou lève (confirmation humaine) le kill switch ;
+- ``paper`` : paper trading local sur les bougies réelles (``run``, ``status``,
+  ``reset``). Ordres simulés uniquement ;
 - ``improve`` : un cycle des boucles d'amélioration (journal décisions/résultats,
   analyse post-trade, ré-évaluation walk-forward) ; propose, n'applique rien.
   ``--review ID --reviewer NOM --approve|--reject`` trace une revue humaine.
@@ -243,6 +245,124 @@ def cmd_kill_switch(args, settings: Settings) -> int:
     return 0
 
 
+def cmd_paper(args) -> int:
+    """Paper trading : moteur de décision sur bougies réelles, broker simulé, aucun ordre réel."""
+    import json
+    from datetime import timedelta
+    from pathlib import Path
+
+    from bot_trading.core.models import Timeframe
+    from bot_trading.marketdata.common import load_dotenv
+
+    runtime = Path(args.runtime_dir)
+    if args.paper_cmd == "status":
+        p = runtime / "account.json"
+        if not p.exists():
+            print(f"Aucun compte paper dans {runtime} (lancer : python -m bot_trading paper run)")
+            return 0
+        a = json.loads(p.read_text(encoding="utf-8"))
+        pos = json.loads((runtime / "positions.json").read_text(encoding="utf-8")) if (runtime / "positions.json").exists() else []
+        print(f"Mode paper (aucun ordre réel) · {a.get('timeframe', '?')} · mis à jour {a.get('updated_at')}")
+        print(f"Equity {a['equity_eur']:.2f} € · solde {a.get('balance_eur', 0):.2f} € · plus haut {a.get('peak_equity_eur', 0):.2f} €")
+        print(f"Dernière bougie {a.get('last_bar_time')} · ordre en attente {a.get('pending_order') or 'aucun'} · kill switch {'ENGAGÉ' if a.get('kill_switch') else 'inactif'}")
+        for x in pos:
+            print(f"  {x['deal_id']} {x['size']:g} lot @ {x['entry_price']:.1f} stop {x['stop_level']:.1f} P&L latent {x.get('unrealized_pnl_eur') or 0:.2f} €")
+        return 0
+    if args.paper_cmd == "compare":
+        from datetime import datetime
+
+        from bot_trading.paper import compare as cmp
+
+        try:
+            manual = cmp.load_manual(args.journal)
+        except (OSError, RuntimeError) as e:
+            print(e, file=sys.stderr)
+            return 1
+        since = datetime.fromisoformat(args.since) if args.since else None
+        if since is not None and since.tzinfo is None:
+            from datetime import timezone
+
+            since = since.replace(tzinfo=timezone.utc)
+        rep_ = cmp.compare(cmp.paper_trades(runtime), manual, start=since, window=timedelta(hours=args.window_hours))
+        print(cmp.to_markdown(rep_))
+        print(f"\nRapport : {cmp.write_report(runtime, rep_)}")
+        return 0
+    if args.paper_cmd == "reset":
+        from bot_trading.paper.trader import archive_runtime
+        from bot_trading.risk.kill_switch import CONFIRMATION
+
+        if args.confirm != CONFIRMATION:
+            print(f"Archivage du compte paper refusé : ajouter --confirm {CONFIRMATION}", file=sys.stderr)
+            return 1
+        dest = archive_runtime(runtime)
+        print(f"Compte paper archivé dans {dest}" if dest else "Rien à archiver.")
+        return 0
+
+    from bot_trading.marketdata.engine import DataEngine
+    from bot_trading.marketdata.storage import ParquetStore
+    from bot_trading.paper import PaperConfig, PaperTrader, StoreBarFeed
+
+    load_dotenv(args.env)
+    settings = Settings.from_env()
+    tf = Timeframe(args.timeframe)
+    store = ParquetStore(args.store_dir)
+    feed = StoreBarFeed(store, settings.instrument.epic, tf, tuple(args.sources))
+    cfg = PaperConfig(runtime_dir=runtime, timeframe=tf, risk_fraction=args.risk, warmup=timedelta(days=args.warmup_days))
+    from bot_trading.notify import notifier_from_env
+
+    notifier = notifier_from_env()
+    trader = PaperTrader(feed, settings, cfg, notifier=notifier)
+    refresher = None
+    if args.refresh_capital:
+        from bot_trading.paper.feeds import CapitalRefresher
+
+        refresher = CapitalRefresher(DataEngine(store), settings.instrument.epic, (tf,))
+    publisher = None
+    if not args.no_regime:
+        from bot_trading.paper.regime import RegimePublisher
+
+        publisher = RegimePublisher(store, runtime, minutes=tf.minutes)
+    last_regime: list[str] = []
+
+    def before_cycle(now) -> None:
+        try:
+            if refresher is not None:
+                refresher.refresh(now)
+        finally:
+            publish(now)
+
+    def publish(now) -> None:
+        if publisher is not None:
+            a = publisher.maybe_publish(now)
+            if a is not None:
+                label = f"{a.regime.value} (score {a.score:+.2f}, entrées {'autorisées' if a.allow_new_entries else 'bloquées'})"
+                print(f"Régime recalculé à {a.asof:%Y-%m-%d %H:%M} UTC : {label}")
+                if last_regime and last_regime[-1] != a.regime.value:
+                    notifier("RÉGIME", f"Changement de régime : {last_regime[-1]} → {label}")
+                last_regime.append(a.regime.value)
+
+    def report(r) -> None:
+        print(f"[{r.time:%Y-%m-%d %H:%M:%S} UTC] {r.message}")
+        for d in r.decisions:
+            print(f"    {d.time:%Y-%m-%d %H:%M} {d.decision.action.value:8} {d.outcome[:28]:28} {d.decision.reason[:100]}")
+
+    print("Paper trading : ordres SIMULÉS uniquement (aucun ordre réel n'existe dans ce dépôt).")
+    print(f"Alertes Telegram : {'activées' if notifier.enabled else 'désactivées (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID absents)'}")
+    try:
+        trader.run(
+            interval_seconds=args.interval,
+            max_cycles=1 if args.once else None,
+            before_cycle=before_cycle,
+            on_report=report,
+        )
+    except KeyboardInterrupt:
+        print("Arrêt demandé : état sauvegardé après chaque bougie.")
+    finally:
+        if refresher:
+            refresher.close()
+    return 0
+
+
 def _parse_grid(items: list[str]) -> dict:
     def conv(v: str):
         if v.lower() == "none":
@@ -326,6 +446,38 @@ def cmd_improve(args) -> int:
     return 0
 
 
+def cmd_regime(args) -> int:
+    """Market Regime Engine sur les données collectées ; ``--publish`` écrit regime.json pour le paper trading."""
+    from datetime import datetime, timezone
+
+    from bot_trading.marketdata.pit import assess_regime, floor_time
+    from bot_trading.marketdata.storage import ParquetStore
+    from bot_trading.paper.regime import data_coverage, guard_coverage
+
+    asof = datetime.fromisoformat(args.asof) if args.asof else floor_time(datetime.now(timezone.utc), 60)
+    if asof.tzinfo is None:
+        asof = asof.replace(tzinfo=timezone.utc)
+    a = guard_coverage(assess_regime(ParquetStore(args.store_dir), asof))
+    macro, inter = data_coverage(a)
+    print(f"Régime à {asof:%Y-%m-%d %H:%M} UTC : {a.regime.value}, score {a.score:+.2f}, incertitude {a.uncertainty:.2f}")
+    print(f"Entrées {'autorisées' if a.allow_new_entries else 'bloquées'}, multiplicateur de taille {a.size_multiplier:g}, qualité min {a.min_setup_quality:g}")
+    print(f"Couverture : {macro} composante(s) macro, {inter} intermarché(s)")
+    for s_ in a.subscores:
+        print(f"  {s_.component:16} {'—' if not s_.available else f'{s_.score:+.2f}'}  {s_.rationale[:110]}")
+    for o in a.overrides:
+        print(f"  ! {o}")
+    if args.publish:
+        from pathlib import Path
+
+        from bot_trading.dashboard.runtime import append_jsonl, write_json
+
+        data = a.model_dump(mode="json")
+        write_json(Path(args.runtime_dir) / "regime.json", data)
+        append_jsonl(Path(args.runtime_dir) / "regime_history.jsonl", data)
+        print(f"Publié : {Path(args.runtime_dir) / 'regime.json'}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="bot_trading")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -364,6 +516,27 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--reset", action="store_true")
     ks.add_argument("--reason", default="")
     ks.add_argument("--confirm", default="", help="JE_CONFIRME_LA_REPRISE pour --reset")
+    pp = sub.add_parser("paper", help="paper trading local (ordres simulés)")
+    psub = pp.add_subparsers(dest="paper_cmd", required=True)
+    pr = psub.add_parser("run", help="boucle de paper trading")
+    pr.add_argument("--once", action="store_true", help="un seul cycle (planificateur externe)")
+    pr.add_argument("--interval", type=float, default=60.0, help="secondes entre deux cycles")
+    pr.add_argument("--timeframe", default="H1", choices=["M15", "H1"])
+    pr.add_argument("--risk", type=float, default=0.10, help="fraction de risque de base (R9)")
+    pr.add_argument("--warmup-days", type=int, default=400)
+    pr.add_argument("--sources", nargs="+", default=["capital"], help="datasets de bougies lus dans le store")
+    pr.add_argument("--refresh-capital", action="store_true", help="collecte Capital.com (lecture seule) avant chaque cycle")
+    pr.add_argument("--no-regime", action="store_true", help="ne pas recalculer regime.json depuis le store (publié par ailleurs)")
+    pr.add_argument("--store-dir", default="data/store")
+    pr.add_argument("--env", default=".env")
+    psub.add_parser("status", help="compte, positions, kill switch")
+    pc = psub.add_parser("compare", help="compare le paper trading aux trades manuels (journal .xlsx ou CSV)")
+    pc.add_argument("--journal", required=True, help="TJ_*.xlsx (onglet Trades) ou CSV date,direction,entry_price,exit_price,pnl")
+    pc.add_argument("--since", help="début de la période (ISO) ; défaut : premier trade paper")
+    pc.add_argument("--window-hours", type=float, default=24.0)
+    prs = psub.add_parser("reset", help="archive le compte paper et repart de zéro")
+    prs.add_argument("--confirm", default="")
+    pp.add_argument("--runtime-dir", default="data/runtime")
     im = sub.add_parser("improve", help="cycle d'amélioration : journal, post-trade, walk-forward (propose seulement)")
     im.add_argument("--runtime", help="dossier du paper trading (decisions.jsonl, trades.jsonl) ; sinon backtest synthétique")
     im.add_argument("--asof", help="date de connaissance (ISO, UTC) ; défaut : fin des données")
@@ -384,7 +557,16 @@ def main(argv: list[str] | None = None) -> int:
     rv.add_argument("--approve", action="store_true")
     rv.add_argument("--reject", action="store_true")
     im.add_argument("--note", default="")
+    rg = sub.add_parser("regime", help="régime de marché calculé sur les données collectées")
+    rg.add_argument("--asof", help="instant d'évaluation (ISO, UTC) ; défaut : dernière heure pleine")
+    rg.add_argument("--store-dir", default="data/store")
+    rg.add_argument("--runtime-dir", default="data/runtime")
+    rg.add_argument("--publish", action="store_true", help="écrit regime.json et regime_history.jsonl")
     args = parser.parse_args(argv)
+    if args.cmd == "regime":
+        return cmd_regime(args)
+    if args.cmd == "paper":
+        return cmd_paper(args)
     if args.cmd == "backtest":
         return cmd_backtest(args)
     if args.cmd == "decisions":

@@ -44,9 +44,12 @@
 
 ## Phase 4 — Paper trading local en temps réel
 
-- Même code qu'en réel, ordres envoyés au broker simulé, prix live Capital.com.
-- Journal de décision complet (y compris les `NO_TRADE` et leurs raisons), tableau de bord.
-- Comparaison avec les trades manuels d'Alexandre sur la même période.
+- [x] Même code qu'en backtest (`EventLoop`), ordres envoyés au broker simulé, bougies closes Capital.com (`python -m bot_trading paper run`).
+- [x] Journal de décision complet (y compris les `NO_TRADE` et leurs raisons), tableau de bord, état persistant et reprise.
+- [x] Production automatique de `regime.json` (Market Regime Engine branché sur le store, recalcul horaire, couverture minimale exigée).
+- [x] Comparaison avec les trades manuels d'Alexandre sur la même période (`paper compare`).
+- [x] Alertes Telegram facultatives (désactivées sans `TELEGRAM_BOT_TOKEN`).
+- [ ] Lancer sur les prix réels : ≥ 8 semaines et ≥ 15 trades (critère de sortie).
 
 **Sortie :** ≥ 8 semaines et ≥ 15 trades, résultats dans l'intervalle attendu par le backtest, zéro incident de sécurité.
 

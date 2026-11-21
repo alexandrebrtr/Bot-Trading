@@ -1,0 +1,212 @@
+"""Pont entre le store Parquet et les agents d'``intelligence`` (``PointInTimeData``).
+
+``StorePITData`` lit ce que les connecteurs ont collecté (FRED/ALFRED, Cboe,
+Trésor, RSS Fed, calendrier FRED, EDGAR) et ne renvoie **que** ce qui était
+publié à ``asof`` (colonne ``available_at``). C'est ce qui permet au Market
+Regime Engine de produire ``regime.json`` automatiquement pour le paper trading.
+
+Correspondances :
+
+| Demande | Dataset | Repli |
+|---|---|---|
+| ``series(id)`` FRED | ``macro.fred.<id>`` (dernière vintage par période) | VIX : ``market.cboe.vix`` ; DGS2/DGS10 : ``rates.treasury.par_curve`` |
+| ``fed_communications`` | ``news.fed_rss`` (communiqués FOMC, minutes, discours, témoignages) | — |
+| ``scheduled_events`` | ``macro.fred.release_calendar`` (CPI, NFP, PCE, PIB, ventes au détail, FOMC si listé) | événements manuels (``extra_events``) |
+| ``earnings`` | ``fundamentals.edgar.facts`` (via ``ticker_ciks``) | — |
+| ``index_weights`` | non collecté (licence SSGA) : ``None`` | univers de repli de l'agent |
+
+Les textes RSS restent des données externes non fiables : ils ne servent qu'au
+calcul de ton déterministe (``intelligence.fed``), jamais comme instructions.
+"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Iterable, Mapping
+from datetime import date, datetime, timedelta
+
+from bot_trading.intelligence.data import EarningsReport, FedCommunication, IndexWeights, Observation, ScheduledEvent
+from bot_trading.intelligence.fed import DEFAULT_SPEAKER_WEIGHTS
+from bot_trading.marketdata.common import et_to_utc
+
+# Nom de publication FRED → type d'événement (HIGH_IMPACT de ``intelligence.macro``).
+RELEASE_KINDS: tuple[tuple[str, str, tuple[int, int]], ...] = (
+    ("consumer price index", "CPI", (8, 30)),
+    ("employment situation", "NFP", (8, 30)),
+    ("personal income and outlays", "PCE", (8, 30)),
+    ("gross domestic product", "GDP", (8, 30)),
+    ("advance monthly sales for retail", "RETAIL_SALES", (8, 30)),
+    ("fomc", "FOMC", (14, 0)),
+)
+
+_SPEAKER_RX = re.compile(r"\b(?:Chair(?:man)?|Vice Chair(?: for Supervision)?|Governor|President)\s+([A-Z][A-Za-z'\-]+)")
+_LEADING_NAME_RX = re.compile(r"^([A-Z][A-Za-z'\-]+),")
+_FRED_FALLBACK = {"VIXCLS": ("market.cboe.vix", "close"), "DGS2": ("rates.treasury.par_curve", "y_2y"), "DGS10": ("rates.treasury.par_curve", "y_10y")}
+
+
+def _day(v) -> date:
+    if isinstance(v, datetime):
+        return v.date()
+    if isinstance(v, date):
+        return v
+    return date.fromisoformat(str(v)[:10])
+
+
+def speaker_of(title: str, feed: str) -> str:
+    for name in DEFAULT_SPEAKER_WEIGHTS:
+        if name != "FOMC" and re.search(rf"\b{re.escape(name)}\b", title):
+            return name
+    m = _SPEAKER_RX.search(title) or _LEADING_NAME_RX.search(title)
+    if m:
+        return m.group(1)
+    return "FOMC" if feed == "press_monetary" else "Fed"
+
+
+def kind_of(title: str, feed: str) -> str | None:
+    t = title.lower()
+    if feed == "speeches":
+        return "speech"
+    if feed == "testimony":
+        return "testimony"
+    if feed == "press_monetary":
+        if "minutes" in t:
+            return "minutes"
+        if "fomc statement" in t or "issues fomc" in t:
+            return "statement"
+        return None
+    return None  # press_all : doublons et sujets non monétaires
+
+
+class StorePITData:
+    """Implémentation de ``intelligence.data.PointInTimeData`` sur un ``ParquetStore``."""
+
+    def __init__(
+        self,
+        store,
+        ticker_ciks: Mapping[str, str] | None = None,
+        extra_events: Iterable[ScheduledEvent] = (),
+    ) -> None:
+        self.store = store
+        self.ticker_ciks = {k.upper(): str(v) for k, v in (ticker_ciks or {}).items()}
+        self.extra_events = list(extra_events)
+        self._rows: dict[str, list[dict]] = {}
+        self._datasets: set[str] | None = None
+
+    # ------------------------------------------------------------ bas niveau
+    def _has(self, dataset: str) -> bool:
+        if self._datasets is None:
+            self._datasets = set(self.store.datasets())
+        return dataset in self._datasets
+
+    def _read(self, dataset: str) -> list[dict]:
+        """Tout le dataset (mis en cache) ; le filtre ``available_at`` est fait par l'appelant."""
+        if dataset not in self._rows:
+            self._rows[dataset] = self.store.read(dataset) if self._has(dataset) else []
+        return self._rows[dataset]
+
+    # ------------------------------------------------------------ séries
+    def series(self, series_id: str, asof: datetime) -> list[Observation]:
+        rows = [r for r in self._read(f"macro.fred.{series_id.lower()}") if r["available_at"] <= asof and r.get("value") is not None]
+        if rows:
+            latest: dict[date, dict] = {}
+            for r in sorted(rows, key=lambda r: r["available_at"]):
+                latest[_day(r["observation_date"])] = r
+            return [
+                Observation(series_id, d, float(r["value"]), r["available_at"], f"ALFRED:{series_id}")
+                for d, r in sorted(latest.items())
+            ]
+        fb = _FRED_FALLBACK.get(series_id)
+        if fb is None:
+            return []
+        dataset, col = fb
+        out: dict[date, Observation] = {}
+        for r in self._read(dataset):
+            if r["available_at"] <= asof and r.get(col) is not None:
+                d = _day(r.get("date") or r["event_time"])
+                out[d] = Observation(series_id, d, float(r[col]), r["available_at"], dataset)
+        return [out[d] for d in sorted(out)]
+
+    # ------------------------------------------------------------ Fed
+    def fed_communications(self, asof: datetime, since: datetime) -> list[FedCommunication]:
+        out = []
+        for r in self._read("news.fed_rss"):
+            t = r["available_at"]
+            if not (since <= t <= asof):
+                continue
+            title = str(r.get("title") or "")
+            kind = kind_of(title, str(r.get("feed") or ""))
+            if kind is None:
+                continue
+            out.append(FedCommunication(
+                id=str(r.get("guid") or r.get("link") or title),
+                speaker=speaker_of(title, str(r.get("feed") or "")),
+                kind=kind,  # type: ignore[arg-type]
+                published_at=t,
+                title=title,
+                text=f"{title}. {r.get('summary') or ''}",
+                url=str(r.get("link") or ""),
+            ))
+        return sorted(out, key=lambda c: c.published_at)
+
+    # ------------------------------------------------------------ calendrier
+    def scheduled_events(self, asof: datetime, start: datetime, end: datetime) -> list[ScheduledEvent]:
+        out: dict[tuple[str, datetime], ScheduledEvent] = {}
+        for r in self._read("macro.fred.release_calendar"):
+            if r["available_at"] > asof:
+                continue
+            name = str(r.get("release_name") or "")
+            for needle, kind, (h, m) in RELEASE_KINDS:
+                if needle in name.lower():
+                    when = et_to_utc(_day(r["release_date"]), h, m)
+                    if start <= when <= end:
+                        out[(kind, when)] = ScheduledEvent(kind, name, when, r["available_at"])
+                    break
+        for e in self.extra_events:
+            if e.known_since <= asof and start <= e.scheduled_at <= end:
+                out[(e.kind, e.scheduled_at)] = e
+        return sorted(out.values(), key=lambda e: e.scheduled_at)
+
+    # ------------------------------------------------------------ entreprises
+    def earnings(self, asof: datetime, ticker: str) -> list[EarningsReport]:
+        cik = self.ticker_ciks.get(ticker.upper())
+        if cik is None:
+            return []
+        facts = [r for r in self._read("fundamentals.edgar.facts") if str(r.get("cik")) == cik and r["available_at"] <= asof]
+        by_period: dict[date, dict[str, dict]] = {}
+        for r in sorted(facts, key=lambda r: r["available_at"]):
+            ps, pe = r.get("period_start"), r.get("period_end")
+            if ps is None or pe is None:
+                continue
+            days = (_day(pe) - _day(ps)).days
+            if not 80 <= days <= 100:  # trimestre seulement (les cumuls annuels faussent les comparaisons)
+                continue
+            by_period.setdefault(_day(pe), {})[str(r["concept"])] = r
+        out = []
+        for pe, concepts in sorted(by_period.items()):
+            rev = concepts.get("Revenues") or concepts.get("RevenueFromContractWithCustomerExcludingAssessedTax")
+            eps = concepts.get("EarningsPerShareDiluted")
+            if rev is None or eps is None:
+                continue
+            op = concepts.get("OperatingIncomeLoss")
+            filed = max(x["available_at"] for x in (rev, eps) + ((op,) if op else ()))
+            out.append(EarningsReport(ticker.upper(), pe, filed, float(rev["value"]), float(eps["value"]), float(op["value"]) if op else None))
+        return out
+
+    def index_weights(self, asof: datetime) -> IndexWeights | None:
+        return None
+
+
+def assess_regime(store, asof: datetime, previous=None, **kw):
+    """Évaluation du Market Regime Engine à ``asof`` sur les données du store (mode paper, sans LLM)."""
+    from bot_trading.config import TradingMode
+    from bot_trading.intelligence.regime import MarketRegimeEngine
+
+    engine = MarketRegimeEngine(StorePITData(store, **kw), mode=TradingMode.PAPER)
+    return engine.assess(asof, previous)
+
+
+def floor_time(t: datetime, minutes: int) -> datetime:
+    """Arrondi vers le bas sur la grille du timeframe (``asof`` d'une évaluation = clôture de bougie)."""
+    base = t.replace(second=0, microsecond=0)
+    total = base.hour * 60 + base.minute
+    return base.replace(hour=0, minute=0) + timedelta(minutes=total - total % minutes)
