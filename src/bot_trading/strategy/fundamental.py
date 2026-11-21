@@ -76,6 +76,10 @@ class FundamentalView:
     invalidations: tuple[str, ...] = ()
     sources: tuple[str, ...] = ()
     overrides: tuple[str, ...] = ()
+    # Biais déduit de la seule étiquette de régime (pas une prévision explicite) :
+    # ne déclenche pas la sortie sur invalidation fondamentale (Q2 validée : en
+    # régime défavorable, stop resserré sans sortie forcée).
+    bias_inferred: bool = False
 
     @classmethod
     def unavailable(cls, why: str = "aucune donnée fondamentale") -> "FundamentalView":
@@ -97,7 +101,8 @@ class FundamentalView:
             return cls.unavailable()
         if reg is None:  # biais seul : on en déduit un régime prudent
             reg = {"bullish": RISK_ON, "neutral": NEUTRE, "bearish": RISK_OFF}[b]
-        if b == "unknown":
+        inferred = b == "unknown"
+        if inferred:
             b = {RISK_ON: "bullish", NEUTRE: "neutral", RISK_OFF: "bearish"}[reg]
         allow = reg != RISK_OFF and not event_blackout
         return cls(
@@ -110,6 +115,7 @@ class FundamentalView:
             min_setup_quality=DEFAULT_MIN_QUALITY[reg],
             event_blackout=event_blackout,
             sources=tuple(sources),
+            bias_inferred=inferred,
         )
 
     @classmethod
