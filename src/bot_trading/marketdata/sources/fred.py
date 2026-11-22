@@ -185,17 +185,28 @@ class PointInTimeSeries:
 class FredSource:
     def __init__(self, api_key: str | None = None, client: PublicSourceClient | None = None, clock=utc_now) -> None:
         self._key = api_key or api_key_from_env()
-        self.client = client or PublicSourceClient(SOURCE, HOSTS, rate_per_second=1.5)  # 120/min max
+        self.client = client or PublicSourceClient(SOURCE, HOSTS, rate_per_second=1.5, max_attempts=5, backoff_base=2.0,
+                                                   error_detail=self._error_detail)  # 120/min max
+        if self.client.error_detail is None:
+            self.client.error_detail = self._error_detail
         self.clock = clock
 
     def __repr__(self) -> str:
         return "FredSource(api_key=***)"
+
+    def _error_detail(self, resp) -> str:
+        """``error_message`` de FRED, sans jamais recopier la clé."""
+        msg = str(resp.json().get("error_message", ""))
+        return msg.replace(self._key, "***") if self._key else msg
 
     def _get(self, endpoint: str, params: dict) -> tuple[dict, bytes]:
         resp = self.client.get(f"{BASE}/{endpoint}", params={**params, "api_key": self._key, "file_type": "json"})
         return resp.json(), resp.content
 
     def observations(self, series_id: str, observation_start: date | None = None) -> tuple[list[dict], Provenance]:
+        """Toutes les vintages (ALFRED). Séries quotidiennes de marché : vintage courante (voir ``current_observations``)."""
+        if SERIES.get(series_id, ("", ""))[1] == "daily":
+            return self.current_observations(series_id, observation_start)
         now = self.clock()
         params = {"series_id": series_id, "realtime_start": REALTIME_MIN, "realtime_end": REALTIME_MAX, "limit": PAGE_LIMIT}
         if observation_start:
@@ -211,6 +222,45 @@ class FredSource:
                 break
         prov = Provenance(SOURCE, f"macro.fred.{series_id.lower()}", f"{BASE}/series/observations", now, params,
                           sha256_bytes("".join(digests).encode()), LICENSE)
+        return rows, prov
+
+    def current_observations(self, series_id: str, observation_start: date | None = None) -> tuple[list[dict], Provenance]:
+        """Vintage courante seulement, publication estimée prudemment (``fred_graph.available_at``).
+
+        Pour les séries quotidiennes (taux, VIX, dollar, spread HY), ALFRED refuse
+        la demande de toutes les vintages (HTTP 400 : trop de dates de vintage).
+        Ces séries de marché ne sont quasiment jamais révisées : la vintage
+        courante, datée du lendemain fin de journée New York, ne crée pas d'avance.
+        """
+        from bot_trading.marketdata.sources import fred_graph
+
+        now = self.clock()
+        params = {"series_id": series_id, "limit": PAGE_LIMIT}
+        if observation_start:
+            params["observation_start"] = observation_start.isoformat()
+        rows, digests, offset = [], [], 0
+        while True:
+            payload, raw = self._get("series/observations", {**params, "offset": offset})
+            digests.append(sha256_bytes(raw))
+            page = []
+            for o in payload.get("observations", []):
+                obs = date.fromisoformat(o["date"])
+                page.append({
+                    "series_id": series_id,
+                    "observation_date": obs,
+                    "realtime_start": fred_graph.estimated_release(series_id, obs),
+                    "realtime_end": None,
+                    "value": _value(o.get("value")),
+                    "event_time": datetime(obs.year, obs.month, obs.day, tzinfo=UTC),
+                    "available_at": fred_graph.available_at(series_id, obs),
+                })
+            rows += page
+            offset += len(page)
+            if not page or offset >= int(payload.get("count", 0)):
+                break
+        rows = [r for r in rows if r["available_at"] <= now]
+        prov = Provenance(SOURCE, f"macro.fred.{series_id.lower()}", f"{BASE}/series/observations", now,
+                          {**params, "vintage": "current"}, sha256_bytes("".join(digests).encode()), LICENSE)
         return rows, prov
 
     def vintage_dates(self, series_id: str) -> list[date]:

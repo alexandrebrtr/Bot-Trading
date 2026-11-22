@@ -117,7 +117,7 @@ def test_fred_unknown_release_time_is_end_of_day_and_pagination():
         return pages[int(q["offset"][0])]
 
     src = fred.FredSource(api_key="k", client=client("fred", fred.HOSTS, RouteTransport(handler=handler)), clock=lambda: NOW)
-    rows, _ = src.observations("DGS10")
+    rows, _ = src.observations("FEDFUNDS")  # série sans heure de publication connue
     assert len(rows) == 2
     assert rows[0]["available_at"] == datetime(2026, 11, 20, 4, 59, 59, tzinfo=UTC)  # 23:59:59 NY
 
@@ -291,3 +291,57 @@ def test_dukascopy_parse_and_aggregate():
     assert rows[0]["ask_close"] - rows[0]["bid_close"] == pytest.approx(0.5)
     assert rows[0]["available_at"] == rows[0]["event_time"] + timedelta(minutes=5)
     assert prov.dataset == "candles.dukascopy.us500.m5"
+
+
+# ------------------------------------------------------------- robustesse de la collecte
+def test_fred_daily_series_use_current_vintage_and_errors_are_explained():
+    seen = []
+
+    def handler(path, q):
+        seen.append(q)
+        if "realtime_start" in q:
+            return 400, {"error_code": 400, "error_message": "Bad Request. Too many vintage dates (key TOPSECRETKEY)."}
+        return {"count": 2, "observations": [
+            {"realtime_start": "2026-11-20", "realtime_end": "2026-11-20", "date": "2026-11-18", "value": "3.9"},
+            {"realtime_start": "2026-11-20", "realtime_end": "2026-11-20", "date": "2026-11-20", "value": "4.0"}]}
+
+    src = fred.FredSource(api_key="TOPSECRETKEY", client=client("fred", fred.HOSTS, RouteTransport(handler=handler)), clock=lambda: NOW)
+    rows, prov = src.observations("DGS2")
+    assert "realtime_start" not in seen[0]
+    # Publication estimée au lendemain fin de journée New York : la valeur du jour même n'est pas encore là.
+    assert [r["value"] for r in rows] == [3.9]
+    assert rows[0]["available_at"] == datetime(2026, 11, 20, 4, 59, 59, tzinfo=UTC)
+    assert prov.dataset == "macro.fred.dgs2"
+    with pytest.raises(SourceHTTPError) as e:
+        src.observations("CPIAUCSL")
+    assert "Too many vintage dates" in str(e.value) and "TOPSECRETKEY" not in str(e.value)
+
+
+def test_backoff_is_capped_and_grows():
+    waits = []
+    from bot_trading.marketdata.http import PublicSourceClient
+
+    c = PublicSourceClient("dukascopy", dukascopy.HOSTS, rate_per_second=1e9, sleep=waits.append, max_attempts=5,
+                           backoff_base=2.0, backoff_max=10.0, transport=RouteTransport(handler=lambda p, q: (503, {})))
+    with pytest.raises(SourceHTTPError):
+        c.get("https://datafeed.dukascopy.com/x")
+    assert waits == [2.0, 4.0, 8.0, 10.0]
+
+
+def test_dukascopy_saturated_day_is_skipped_not_fatal():
+    day = date(2026, 11, 18)
+    recs = [(15 * 3600 + 60 * i, 6800_000, 6801_000, 6799_500, 6801_500, 1.0) for i in range(12)]
+
+    def handler(path, q):
+        if "/2026/10/17/ASK" in path:
+            return 503, {}
+        if "/2026/10/17/" in path or "/2026/10/18/" in path:
+            return bi5(recs)
+        return None
+
+    src = dukascopy.DukascopySource(client("dukascopy", dukascopy.HOSTS, RouteTransport(handler=handler)), clock=lambda: NOW)
+    rows, _ = src.fetch(date(2026, 11, 17), date(2026, 11, 18), Timeframe.M5)
+    assert src.skipped == [(date(2026, 11, 17), "ASK")]
+    # Le 17 est laissé en trou (pas de bougie sans ask) ; le 18 est collecté.
+    assert {r["event_time"].date() for r in rows} == {day}
+    assert all(r["ask_close"] is not None for r in rows)

@@ -75,7 +75,9 @@ class DukascopySource:
         price_divisor: float = DEFAULT_PRICE_DIVISOR,
         clock=utc_now,
     ) -> None:
-        self.client = client or PublicSourceClient(SOURCE, HOSTS, rate_per_second=5)
+        # Le datafeed renvoie 503 quand on va trop vite : débit modéré et attentes longues (jusqu'à ~1 min).
+        self.client = client or PublicSourceClient(SOURCE, HOSTS, rate_per_second=2, max_attempts=7, backoff_base=2.0, backoff_max=60.0)
+        self.skipped: list[tuple[date, str]] = []  # jours abandonnés après toutes les tentatives (à relancer)
         self.symbol = symbol
         self.epic = epic
         self.price_divisor = price_divisor
@@ -86,6 +88,11 @@ class DukascopySource:
             raw = self.client.get(day_url(self.symbol, day, side)).content
         except SourceHTTPError as e:
             if e.status == 404:
+                return [], b""
+            if e.status in self.client.RETRY_STATUSES:
+                # Serveur saturé malgré les tentatives : jour sauté et signalé, la collecte continue.
+                # Relancer la même commande le complète (dédoublonnage du store).
+                self.skipped.append((day, side.upper()))
                 return [], b""
             raise
         return parse_minute_candles(raw, day, self.price_divisor), raw
@@ -101,8 +108,11 @@ class DukascopySource:
         ask_all: list[Candle] = []
         digest = []
         for day in daterange_days(start, end):
+            n_skipped = len(self.skipped)
             b, rb = self._day(day, "BID")
             a, ra = self._day(day, "ASK")
+            if len(self.skipped) > n_skipped:
+                continue  # un côté manquant : jour entier laissé en trou plutôt que sans ask
             bid_all += b
             ask_all += a
             digest.append(sha256_bytes(rb + ra))

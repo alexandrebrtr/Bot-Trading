@@ -16,6 +16,7 @@ from datetime import date, datetime, timedelta
 from bot_trading.core.models import Timeframe
 from bot_trading.marketdata.common import load_dotenv, utc_now
 from bot_trading.marketdata.engine import DataEngine, DatasetSpec
+from bot_trading.marketdata.http import SourceHTTPError
 from bot_trading.marketdata.storage import ParquetStore
 
 # Grosses pondérations suivies par défaut (tickers ; CIK résolus via company_tickers.json).
@@ -51,21 +52,41 @@ def refresh(engine: DataEngine, source: str, args: argparse.Namespace) -> None:
             for tf, (rows, prov) in src.fetch_many(a, b, [Timeframe(t) for t in args.timeframes]).items():
                 _report(f"{prov.dataset} {a}→{b}", engine.ingest_candles(rows, prov, tf))
             a = b + timedelta(days=1)
+        if src.skipped:
+            days = sorted({d for d, _ in src.skipped})
+            print(f"ATTENTION : {len(days)} jour(s) sautés (serveur Dukascopy saturé) : "
+                  f"{', '.join(d.isoformat() for d in days[:10])}{' …' if len(days) > 10 else ''}. "
+                  f"Relancer la même commande pour les compléter.")
     elif source == "fred":
         from bot_trading.marketdata.sources import fred
 
         src = fred.FredSource()
+        failed = []
         for sid in args.series or list(fred.SERIES):
-            rows, prov = src.observations(sid)
+            try:
+                rows, prov = src.observations(sid)
+            except SourceHTTPError as e:  # une série en erreur n'arrête pas les autres
+                print(f"macro.fred.{sid.lower():32} ÉCHEC : {e}")
+                failed.append(sid)
+                continue
             _report(prov.dataset, engine.ingest_fred(rows, prov, sid))
-        rows, prov = src.release_calendar(now.date() - timedelta(days=30), now.date() + timedelta(days=90))
-        _report(prov.dataset, engine.ingest(rows, prov, fred.CALENDAR_KEYS))
+        try:
+            rows, prov = src.release_calendar(now.date() - timedelta(days=30), now.date() + timedelta(days=90))
+            _report(prov.dataset, engine.ingest(rows, prov, fred.CALENDAR_KEYS))
+        except SourceHTTPError as e:
+            print(f"macro.fred.release_calendar             ÉCHEC : {e}")
+        if failed:
+            print(f"ATTENTION : séries FRED non collectées : {', '.join(failed)}")
     elif source == "fred-graph":
         from bot_trading.marketdata.sources import fred, fred_graph
 
         src = fred_graph.FredGraphSource()
         for sid in args.series or list(fred.SERIES):
-            rows, prov = src.observations(sid)
+            try:
+                rows, prov = src.observations(sid)
+            except SourceHTTPError as e:
+                print(f"macro.fredgraph.{sid.lower():27} ÉCHEC : {e}")
+                continue
             _report(prov.dataset, engine.ingest(rows, prov, fred_graph.KEYS, DatasetSpec(prov.dataset, fred.SERIES.get(sid, ("", "monthly"))[1])))
     elif source == "fed-rss":
         from bot_trading.marketdata.sources.fed_rss import FEEDS, FedRssSource
@@ -131,9 +152,16 @@ def main(argv: list[str] | None = None) -> int:
         for r in reports:
             print(("OK   " if r.ok else "ALERTE ") + r.summary())
         return 0 if all(r.ok for r in reports) else 1
+    from bot_trading.marketdata.http import SourceHTTPError
+
+    errors = 0
     for s in args.sources:
-        refresh(engine, s, args)
-    return 0
+        try:
+            refresh(engine, s, args)
+        except SourceHTTPError as e:  # une source en panne n'empêche pas les suivantes
+            print(f"{s} : ÉCHEC ({e})")
+            errors += 1
+    return 1 if errors else 0
 
 
 if __name__ == "__main__":
