@@ -59,6 +59,7 @@ class PublicSourceClient:
     """Session GET-only avec limiteur de débit et quelques tentatives sur 429/5xx."""
 
     RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+    NO_RESPONSE = 0  # ``SourceHTTPError.status`` quand le serveur n'a pas répondu (délai, connexion refusée)
 
     def __init__(
         self,
@@ -94,9 +95,18 @@ class PublicSourceClient:
     def get(self, url: str, params: dict | None = None, headers: dict | None = None) -> requests.Response:
         path = urlsplit(url).path
         last_status = 0
+        last_detail = ""
         for attempt in range(self.max_attempts):
             self.limiter.acquire()
-            resp = self.http.get(url, params=params, headers=headers, timeout=self.timeout, allow_redirects=False)
+            try:
+                resp = self.http.get(url, params=params, headers=headers, timeout=self.timeout, allow_redirects=False)
+            except (requests.ConnectionError, requests.Timeout) as e:
+                # Délai de connexion ou de lecture, connexion coupée : même traitement qu'un 503.
+                # Statut 0 = pas de réponse HTTP. Le message ne cite que le type d'erreur (pas d'URL).
+                last_status, last_detail = 0, f"pas de réponse : {type(e).__name__}"
+                if attempt + 1 < self.max_attempts:
+                    self.sleep(min(self.backoff_base * 2.0**attempt, self.backoff_max))
+                continue
             if resp.status_code in self.RETRY_STATUSES and attempt + 1 < self.max_attempts:
                 last_status = resp.status_code
                 self.sleep(min(self.backoff_base * 2.0**attempt, self.backoff_max))
@@ -110,4 +120,4 @@ class PublicSourceClient:
                         detail = ""
                 raise SourceHTTPError(self.source, resp.status_code, path, detail)
             return resp
-        raise SourceHTTPError(self.source, last_status, path)
+        raise SourceHTTPError(self.source, last_status, path, last_detail)
