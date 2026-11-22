@@ -42,14 +42,29 @@ def refresh(engine: DataEngine, source: str, args: argparse.Namespace) -> None:
     elif source == "dukascopy":
         from bot_trading.marketdata.sources.dukascopy import DukascopySource
 
-        src = DukascopySource(epic=args.epic)
+        from bot_trading.marketdata.bars import candles_dataset
+        from bot_trading.marketdata.sources.dukascopy import SourceUnavailableError
+
+        src = DukascopySource(epic=args.epic, rate_per_second=args.rate)
         first = date.fromisoformat(args.start) if args.start else now.date() - timedelta(days=args.days)
+        if args.resume:
+            # Reprise après une collecte interrompue : à partir du lendemain de la dernière bougie stockée.
+            tf0 = Timeframe(args.timeframes[0])
+            last = engine.store.last(candles_dataset("dukascopy", args.epic, tf0), column="event_time")
+            if last is not None and last.date() + timedelta(days=1) > first:
+                first = last.date() + timedelta(days=1)
+                print(f"Reprise à partir du {first} (dernière bougie {tf0.value} stockée : {last:%Y-%m-%d %H:%M} UTC)")
         # Par tranches de ``--chunk-days`` : quelques années de minutes ne tiennent pas en mémoire d'un coup.
         # Chaque tranche est téléchargée une fois et agrégée dans tous les timeframes demandés.
         a = first
         while a <= now.date():
             b = min(a + timedelta(days=args.chunk_days - 1), now.date())  # tranche [a, b], bornes incluses
-            for tf, (rows, prov) in src.fetch_many(a, b, [Timeframe(t) for t in args.timeframes]).items():
+            try:
+                chunk = src.fetch_many(a, b, [Timeframe(t) for t in args.timeframes])
+            except SourceUnavailableError as e:
+                print(f"ARRÊT : {e}")
+                break
+            for tf, (rows, prov) in chunk.items():
                 _report(f"{prov.dataset} {a}→{b}", engine.ingest_candles(rows, prov, tf))
             a = b + timedelta(days=1)
         if src.skipped:
@@ -139,6 +154,8 @@ def main(argv: list[str] | None = None) -> int:
     rf.add_argument("--days", type=int, default=30)
     rf.add_argument("--start", help="dukascopy : première date (AAAA-MM-JJ), sinon aujourd'hui − --days")
     rf.add_argument("--chunk-days", type=int, default=31, help="dukascopy : taille des tranches téléchargées")
+    rf.add_argument("--rate", type=float, default=1.0, help="dukascopy : requêtes par seconde (baisser si le serveur sature)")
+    rf.add_argument("--resume", action="store_true", help="dukascopy : reprendre après la dernière bougie déjà stockée")
     rf.add_argument("--years", type=int, default=2)
     rf.add_argument("--series", nargs="*")
     rf.add_argument("--tickers", nargs="*")

@@ -40,6 +40,10 @@ LICENSE = "Dukascopy : conditions des données non trouvées, usage personnel/re
 _REC = struct.Struct(">IIIIIf")
 
 
+class SourceUnavailableError(RuntimeError):
+    """Trop d'échecs consécutifs : la source est considérée comme injoignable pour cette collecte."""
+
+
 def day_url(symbol: str, day: date, side: str) -> str:
     return f"{BASE}/{symbol}/{day.year:04d}/{day.month - 1:02d}/{day.day:02d}/{side.upper()}_candles_min_1.bi5"
 
@@ -74,10 +78,16 @@ class DukascopySource:
         epic: str = "US500",
         price_divisor: float = DEFAULT_PRICE_DIVISOR,
         clock=utc_now,
+        rate_per_second: float = 1.0,
+        max_consecutive_skips: int = 5,
     ) -> None:
-        # Le datafeed renvoie 503 quand on va trop vite : débit modéré et attentes longues (jusqu'à ~1 min).
-        self.client = client or PublicSourceClient(SOURCE, HOSTS, rate_per_second=2, max_attempts=7, backoff_base=2.0, backoff_max=60.0)
+        # Le datafeed renvoie 503 ou ne répond plus quand on va trop vite :
+        # débit modéré et attentes longues (jusqu'à 1 min) avant d'abandonner un jour.
+        self.client = client or PublicSourceClient(SOURCE, HOSTS, rate_per_second=rate_per_second, max_attempts=7,
+                                                   backoff_base=2.0, backoff_max=60.0, timeout=20.0)
         self.skipped: list[tuple[date, str]] = []  # jours abandonnés après toutes les tentatives (à relancer)
+        self.max_consecutive_skips = max_consecutive_skips
+        self._consecutive = 0
         self.symbol = symbol
         self.epic = epic
         self.price_divisor = price_divisor
@@ -89,12 +99,19 @@ class DukascopySource:
         except SourceHTTPError as e:
             if e.status == 404:
                 return [], b""
-            if e.status in self.client.RETRY_STATUSES:
-                # Serveur saturé malgré les tentatives : jour sauté et signalé, la collecte continue.
+            if e.status in self.client.RETRY_STATUSES or e.status == self.client.NO_RESPONSE:
+                # Serveur saturé ou muet malgré les tentatives : jour sauté et signalé, la collecte continue.
                 # Relancer la même commande le complète (dédoublonnage du store).
                 self.skipped.append((day, side.upper()))
+                self._consecutive += 1
+                if self._consecutive >= self.max_consecutive_skips:
+                    raise SourceUnavailableError(
+                        f"Dukascopy injoignable : {self._consecutive} échecs d'affilée (dernier : {e}). "
+                        "Les tranches déjà collectées sont enregistrées ; réessayer plus tard avec --resume."
+                    ) from e
                 return [], b""
             raise
+        self._consecutive = 0
         return parse_minute_candles(raw, day, self.price_divisor), raw
 
     def fetch(self, start: date, end: date, tf: Timeframe = Timeframe.M5) -> tuple[list[dict], Provenance]:

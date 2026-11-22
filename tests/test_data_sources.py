@@ -345,3 +345,36 @@ def test_dukascopy_saturated_day_is_skipped_not_fatal():
     # Le 17 est laissé en trou (pas de bougie sans ask) ; le 18 est collecté.
     assert {r["event_time"].date() for r in rows} == {day}
     assert all(r["ask_close"] is not None for r in rows)
+
+
+def test_connection_timeout_is_retried_then_reported_without_url():
+    import requests as rq
+
+    calls = []
+
+    def handler(path, q):
+        calls.append(path)
+        if len(calls) < 3:
+            raise rq.ConnectTimeout("Connection to datafeed.dukascopy.com timed out")
+        return {"ok": True}
+
+    c = client("dukascopy", dukascopy.HOSTS, RouteTransport(handler=handler))
+    c.max_attempts = 3
+    assert c.get("https://datafeed.dukascopy.com/x").json() == {"ok": True}
+    c2 = client("dukascopy", dukascopy.HOSTS, RouteTransport(handler=lambda p, q: (_ for _ in ()).throw(rq.ConnectionError("reset"))))
+    with pytest.raises(SourceHTTPError) as e:
+        c2.get("https://datafeed.dukascopy.com/x")
+    assert e.value.status == 0 and "ConnectionError" in str(e.value)
+
+
+def test_dukascopy_unreachable_stops_after_consecutive_failures():
+    import requests as rq
+
+    def handler(path, q):
+        raise rq.ConnectTimeout("timed out")
+
+    src = dukascopy.DukascopySource(client("dukascopy", dukascopy.HOSTS, RouteTransport(handler=handler)), clock=lambda: NOW,
+                                    max_consecutive_skips=4)
+    with pytest.raises(dukascopy.SourceUnavailableError):
+        src.fetch(date(2026, 11, 1), date(2026, 11, 18), Timeframe.M5)
+    assert len(src.skipped) == 4  # arrêt rapide au lieu de 36 jours d'attente
