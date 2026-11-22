@@ -28,11 +28,12 @@ class SourceBlockedError(PermissionError):
 class SourceHTTPError(RuntimeError):
     """Erreur HTTP d'une source, sans secret dans le message."""
 
-    def __init__(self, source: str, status: int, path: str) -> None:
-        super().__init__(f"{source} : HTTP {status} sur {path}")
+    def __init__(self, source: str, status: int, path: str, detail: str = "") -> None:
+        super().__init__(f"{source} : HTTP {status} sur {path}" + (f" ({detail})" if detail else ""))
         self.source = source
         self.status = status
         self.path = path
+        self.detail = detail
 
 
 class PublicGuardAdapter(BaseAdapter):
@@ -70,6 +71,9 @@ class PublicSourceClient:
         timeout: float = 30.0,
         max_attempts: int = 3,
         sleep: Callable[[float], None] = time.sleep,
+        backoff_base: float = 1.0,
+        backoff_max: float = 60.0,
+        error_detail: Callable[[requests.Response], str] | None = None,
     ) -> None:
         self.source = source
         self.guard = PublicGuardAdapter(allowed_hosts, transport)
@@ -83,6 +87,9 @@ class PublicSourceClient:
         self.timeout = timeout
         self.max_attempts = max_attempts
         self.sleep = sleep
+        self.backoff_base = backoff_base
+        self.backoff_max = backoff_max
+        self.error_detail = error_detail
 
     def get(self, url: str, params: dict | None = None, headers: dict | None = None) -> requests.Response:
         path = urlsplit(url).path
@@ -92,9 +99,15 @@ class PublicSourceClient:
             resp = self.http.get(url, params=params, headers=headers, timeout=self.timeout, allow_redirects=False)
             if resp.status_code in self.RETRY_STATUSES and attempt + 1 < self.max_attempts:
                 last_status = resp.status_code
-                self.sleep(2.0**attempt)
+                self.sleep(min(self.backoff_base * 2.0**attempt, self.backoff_max))
                 continue
             if resp.status_code >= 400:
-                raise SourceHTTPError(self.source, resp.status_code, path)
+                detail = ""
+                if self.error_detail is not None:
+                    try:
+                        detail = self.error_detail(resp)[:300]
+                    except Exception:  # noqa: BLE001 - le détail est facultatif
+                        detail = ""
+                raise SourceHTTPError(self.source, resp.status_code, path, detail)
             return resp
         raise SourceHTTPError(self.source, last_status, path)
