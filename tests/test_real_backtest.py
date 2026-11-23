@@ -110,3 +110,25 @@ def test_equity_component_is_wired_to_the_store(tmp_path):
     reps = StorePITData(store).earnings(ASOF, "AAPL")
     assert [r.period_end for r in reps] == [date(2026, 6, 28), date(2026, 9, 27)]
     assert StorePITData(store).earnings(datetime(2026, 9, 1, tzinfo=UTC), "AAPL")[-1].period_end == date(2026, 6, 28)
+
+
+def test_inflation_scoring_favours_direction_over_level():
+    """3,5 % qui reflue : pénalisé par l'ancienne notation, presque neutre avec la nouvelle."""
+    from bot_trading.intelligence.macro import MacroConfig
+    from bot_trading.intelligence.series import squash
+
+    def f1(cfg, level, trend):
+        return (-cfg.inflation_level_weight * squash((level - cfg.inflation_comfort) / 1.0)
+                - cfg.inflation_trend_weight * squash(trend / cfg.inflation_trend_scale))
+
+    new, old = MacroConfig(), MacroConfig.level_first()
+    assert f1(new, 3.5, -0.5) > 0 > f1(old, 3.5, -0.5)
+    assert f1(new, 2.5, +0.5) < f1(old, 2.5, +0.5) < 0  # une réaccélération pèse plus qu'avant
+    assert abs(new.inflation_level_weight + new.inflation_trend_weight + new.inflation_surprise_weight - 1) < 1e-9
+
+
+def test_cli_store_backtest_accepts_old_inflation_scoring(tmp_path, capsys):
+    store = to_store(build_store(), tmp_path / "store")
+    _write_bars(store, datetime(2026, 6, 1, tzinfo=UTC), datetime(2026, 11, 20, tzinfo=UTC))
+    assert cli(["backtest", "--store", str(tmp_path / "store"), "--holdout-months", "1", "--inflation-scoring", "niveau"]) == 0
+    assert "Notation de l'inflation : niveau" in capsys.readouterr().out

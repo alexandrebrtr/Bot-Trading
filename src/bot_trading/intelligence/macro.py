@@ -50,6 +50,14 @@ class MacroConfig:
     )
     inflation_target: float = 2.0
     inflation_comfort: float = 2.5  # niveau neutre pour les actions
+    # F1 : poids du niveau, de la tendance et de la surprise (somme 1).
+    # Le marché réagit surtout à la *direction* de l'inflation : une inflation à
+    # 3,5 % qui reflue n'empêche pas une hausse (2023-2024). Ancienne notation
+    # (niveau d'abord) : MacroConfig.level_first().
+    inflation_level_weight: float = 0.25
+    inflation_trend_weight: float = 0.55
+    inflation_surprise_weight: float = 0.20
+    inflation_trend_scale: float = 0.5  # pt d'accélération 3 mois vs 6 mois pour un signal fort
     # Âge max de la dernière donnée (jours) avant de la déclarer périmée.
     max_age_monthly_days: int = 75
     max_age_weekly_days: int = 21
@@ -65,6 +73,14 @@ class MacroConfig:
     # Marge maximale de l'avis LLM sur la composante Fed (part du score F4).
     llm_max_share: float = 0.3
     speaker_weights: dict[str, float] = field(default_factory=lambda: dict(DEFAULT_SPEAKER_WEIGHTS))
+
+
+def _level_first() -> "MacroConfig":
+    """Notation d'origine de l'inflation (niveau 0,5, tendance 0,3), pour comparaison."""
+    return MacroConfig(inflation_level_weight=0.5, inflation_trend_weight=0.3, inflation_trend_scale=0.75)
+
+
+MacroConfig.level_first = staticmethod(_level_first)  # type: ignore[attr-defined]
 
 
 def _fresh(obs: list[Observation], asof: datetime, max_days: int) -> bool:
@@ -150,10 +166,11 @@ class MacroIntelligenceAgent:
                     metrics["core_cpi_surprise_z"] = round(st[1], 3)
                     surprise_term = -squash(st[1] / 1.5)
                     surprise_note = f"surprise statistique z={st[1]:+.2f} (pas de consensus gratuit)"
+        c = self.cfg
         score = clip(
-            -0.5 * squash((level - self.cfg.inflation_comfort) / 1.0)
-            - 0.3 * squash(trend / 0.75)
-            + 0.2 * surprise_term
+            -c.inflation_level_weight * squash((level - c.inflation_comfort) / 1.0)
+            - c.inflation_trend_weight * squash(trend / c.inflation_trend_scale)
+            + c.inflation_surprise_weight * surprise_term
         )
         why = (
             f"Inflation sous-jacente {level:.2f} % annualisée sur 3 mois (cible {self.cfg.inflation_target:.0f} %), "
