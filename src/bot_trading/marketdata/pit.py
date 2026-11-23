@@ -213,14 +213,14 @@ def assess_regime(store, asof: datetime, previous=None, **kw):
     return engine.assess(asof, previous)
 
 
-def _engine(store, fallback_universe=None, **kw):
+def _engine(store, fallback_universe=None, macro_config=None, **kw):
     """Market Regime Engine branché sur le store, avec l'univers « entreprises » par défaut."""
     from bot_trading.config import TradingMode
     from bot_trading.intelligence.regime import MarketRegimeEngine
     from bot_trading.marketdata.universe import TOP_TICKERS
 
     universe = list(TOP_TICKERS if fallback_universe is None else fallback_universe)
-    return MarketRegimeEngine(StorePITData(store, **kw), mode=TradingMode.PAPER, fallback_universe=universe)
+    return MarketRegimeEngine(StorePITData(store, **kw), mode=TradingMode.PAPER, fallback_universe=universe, macro_config=macro_config)
 
 
 def floor_time(t: datetime, minutes: int) -> datetime:

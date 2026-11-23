@@ -188,7 +188,14 @@ def _store_backtest_data(args, settings, tf):
             print(f"  régime {t:%Y-%m-%d} : {a.regime.value}", flush=True)
 
     print("Régime point-in-time : une évaluation par jour à 21:00 UTC (peut prendre quelques minutes)…", flush=True)
-    hist = regime_history(store, kept[0].time, holdout_start, cache_path=args.regime_cache, progress=progress)
+    macro_config = None
+    if args.inflation_scoring == "niveau":
+        from bot_trading.intelligence.macro import MacroConfig
+
+        macro_config = MacroConfig.level_first()
+    print(f"Notation de l'inflation : {args.inflation_scoring}"
+          f"{' (utiliser un cache des régimes propre à cette notation)' if args.regime_cache else ''}")
+    hist = regime_history(store, kept[0].time, holdout_start, cache_path=args.regime_cache, progress=progress, macro_config=macro_config)
     if hist:
         from collections import Counter
 
@@ -565,6 +572,8 @@ def main(argv: list[str] | None = None) -> int:
     bt.add_argument("--spread", choices=["capital", "source"], default="capital", help="mode --store : coût Capital.com (défaut) ou spread de la source")
     bt.add_argument("--regime-cache", help="mode --store : JSONL des régimes déjà calculés (réutilisés)")
     bt.add_argument("--no-fundamental", action="store_true", help="mode --store : techniques et benchmarks seulement")
+    bt.add_argument("--inflation-scoring", choices=["tendance", "niveau"], default="tendance",
+                    help="mode --store : F1 noté surtout sur la tendance (défaut) ou sur le niveau (ancienne notation)")
     dc = sub.add_parser("decisions")
     dc.add_argument("--timeframe", default="H1", choices=["M5", "M15", "H1"])
     dc.add_argument("--years", type=int, default=2)
