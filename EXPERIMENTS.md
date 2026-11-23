@@ -51,4 +51,4 @@ Espace de recherche (`SEARCH_SPACE`) : variante d'entrée, seuils FVG/OB, extens
 
 | ID | Date | Version du code | Essais cumulés | Résultat hors échantillon | Décision |
 |---|---|---|---|---|---|
-| — | — | — | 0 | — | — |
+| EXP-13 | 2026-11-23 | main 21bad59 | 88 | Données réelles 2018-2025, 11 fenêtres de test (2020-01 → 2025-07), levier 10. T3 = 3 : 11 trades, +0,10 R, +1,21 € ; 4 : 16 trades, +0,18 R ; 6 et désactivé (identiques) : 21 trades, +0,15 R, +1,74 €, DD 5,5 % ; sélection WF : 14 trades, +0,40 R (choisit 3 sur 7 fenêtres sur 11). Buy & hold : −0,38 €, DD 48,5 %. Moins de 30 trades OOS partout : rien de significatif. | Garder T3 = 3. T3 n'est pas le vrai goulot : le désactiver n'ajoute que 10 trades en 5,5 ans, les autres étages bloquent les mêmes heures. |
