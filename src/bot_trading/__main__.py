@@ -26,6 +26,7 @@ Il n'existe aucune commande d'exécution réelle.
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 
 from bot_trading.analysis.fvg import FVGEngine
@@ -77,7 +78,7 @@ def cmd_backtest(args) -> int:
         RandomEntry,
         SimpleTrendFollowing,
     )
-    from bot_trading.backtest.validation import compare, metrics_table, walk_forward, walk_forward_folds
+    from bot_trading.backtest.validation import compare, fixed_out_of_sample, metrics_table, walk_forward, walk_forward_folds
     from bot_trading.config import TradingMode
     from bot_trading.core.models import Timeframe
     from bot_trading.marketdata.source import CsvPriceSource, InMemoryPointInTimeSource
@@ -117,13 +118,20 @@ def cmd_backtest(args) -> int:
     results = compare(factories, bars, config, pit)
     print(metrics_table(results))
 
-    if args.walk_forward:
+    ext_values = _extension_grid(args.extension_grid) if args.extension_grid else None
+    if ext_values and pit is None:
+        print("--extension-grid : biais fondamental requis (mode --store ou synthétique).", file=sys.stderr)
+        return 1
+    if args.walk_forward or ext_values:
         # Mode store : la réserve est déjà retirée de ``bars`` (jamais lue ici).
         hold_m = 0 if args.store else args.holdout_months
         folds, holdout = walk_forward_folds(bars[0].time, bars[-1].time, args.train_months, args.test_months, args.test_months, hold_m)
         if not folds:
             print("Walk-forward : historique trop court pour une fenêtre.")
             return 0
+    if ext_values:
+        _extension_study(ext_values, settings, args, bars, folds, config, pit, fixed_out_of_sample, walk_forward)
+    if args.walk_forward:
         grid = {"mode": ["touch", "half", "full_reject"], "take_profit_r": [1.5, 2.0, 3.0]}
         rep = walk_forward(lambda p: FVGTechnical(settings, params=FVGEntryParams(**p)), grid, bars, folds, config, pit)
         print("\nWalk-forward (technique FVG) :")
@@ -145,6 +153,46 @@ def cmd_backtest(args) -> int:
     if holdout_note:
         print(holdout_note)
     return 0
+
+
+def _extension_grid(text: str) -> list[float]:
+    """``"3,4,6,off"`` → [3.0, 4.0, 6.0, inf] (``off`` : filtre d'entrée tardive T3 désactivé)."""
+    out = []
+    for tok in (t.strip().lower() for t in text.split(",")):
+        if tok:
+            out.append(math.inf if tok in ("off", "inf", "aucun") else float(tok))
+    return out
+
+
+def _extension_study(values, settings, args, bars, folds, config, pit, fixed_out_of_sample, walk_forward) -> None:
+    """T3 (extension max D1 en ATR) : chaque valeur sur les mêmes fenêtres de test, puis sélection walk-forward."""
+    from bot_trading.backtest.strategies import BuyAndHold
+    from bot_trading.strategy import DecisionParams, DecisionStrategy, TechnicalParams
+
+    def factory(p):
+        return DecisionStrategy(settings, technical=TechnicalParams(**p), decision=DecisionParams(base_risk_fraction=args.risk))
+
+    def fmt(v, nd=2):
+        return "—" if v is None else f"{v:+.{nd}f}" if isinstance(v, float) else str(v)
+
+    print(f"\nEntrée tardive (T3) : {len(values)} valeurs × {len(folds)} fenêtres de test "
+          f"({folds[0].test_start.date()} → {folds[-1].test_end.date()}), mêmes coûts et même Risk Engine.")
+    print("| Extension max (ATR D1) | Trades OOS | Espérance R | Profit factor | P&L net € | Fenêtres > 0 | Pire DD |")
+    print("|---|---|---|---|---|---|---|")
+    rows = [(f"{v:g}" if math.isfinite(v) else "désactivé", fixed_out_of_sample(factory, {"max_extension_atr": v}, bars, folds, config, pit)) for v in values]
+    rows.append(("Buy & hold (repère)", fixed_out_of_sample(lambda p: BuyAndHold(settings), {}, bars, folds, config, pit)))
+    for name, rep in rows:
+        s = rep.summary()
+        dd = s["oos_worst_drawdown"]
+        pf = "—" if s["oos_profit_factor"] is None else format(s["oos_profit_factor"], ".2f")
+        print(f"| {name} | {s['oos_trades']} | {fmt(s['oos_expectancy_r'])} | {pf} | "
+              f"{s['oos_net_pnl_eur']:+.2f} | {s['oos_positive_folds']}/{s['folds']} | {'—' if dd is None else f'{dd:.1%}'} |")
+    rep = walk_forward(factory, {"max_extension_atr": values}, bars, folds, config, pit)
+    s = rep.summary()
+    print(f"Sélection walk-forward (valeur choisie sur chaque fenêtre d'entraînement) : {s['oos_trades']} trades OOS, "
+          f"espérance {fmt(s['oos_expectancy_r'])} R, P&L {s['oos_net_pnl_eur']:+.2f} €, "
+          f"valeurs choisies {[p['max_extension_atr'] for p in s['params_by_fold']]}")
+    print(f"Essais à reporter dans EXPERIMENTS.md : {len(values) * len(folds) * 2} (valeurs fixes + sélection).")
 
 
 def _store_backtest_data(args, settings, tf):
@@ -598,7 +646,7 @@ def _store_args(p) -> None:
     p.add_argument("--spread", choices=["capital", "source"], default="capital", help="mode --store : coût Capital.com (défaut) ou spread de la source")
     p.add_argument("--regime-cache", help="mode --store : JSONL des régimes déjà calculés (réutilisés)")
     p.add_argument("--no-fundamental", action="store_true", help="mode --store : techniques et benchmarks seulement")
-    p.add_argument("--leverage", type=float, help="scénario : levier (défaut de la politique : 20)")
+    p.add_argument("--leverage", type=float, help="scénario : levier (défaut de la politique : 10)")
     p.add_argument("--max-margin-loss", type=float, help="scénario : perte max par position en fraction de la marge (politique : 0.5)")
     p.add_argument("--capital", type=float, help="scénario : capital initial en € (politique : 20)")
     p.add_argument("--inflation-scoring", choices=["tendance", "niveau"], default="tendance",
@@ -623,6 +671,7 @@ def main(argv: list[str] | None = None) -> int:
     bt.add_argument("--train-months", type=int, default=24)
     bt.add_argument("--test-months", type=int, default=6)
     bt.add_argument("--holdout-months", type=int, default=12)
+    bt.add_argument("--extension-grid", help="Decision Engine : valeurs d'extension max D1 en ATR à comparer hors échantillon (ex. 3,4,6,off)")
     _store_args(bt)
     dc = sub.add_parser("decisions")
     dc.add_argument("--timeframe", default="H1", choices=["M5", "M15", "H1"])

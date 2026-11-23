@@ -81,7 +81,7 @@ class FoldResult:
     fold: Fold
     best_params: dict
     in_sample_score: float
-    in_sample: Metrics
+    in_sample: Metrics | None  # None : paramètres fixés d'avance (fixed_out_of_sample)
     out_of_sample: Metrics
     oos_result: BacktestResult = field(repr=False)
 
@@ -140,6 +140,29 @@ def walk_forward(
         res = bt.run(factory(best[1]), test, trade_start=ts2)
         out.append(FoldResult(fold, best[1], best[0], best[2], compute_metrics(res), res))
     return WalkForwardReport(out, n_trials=len(combos) * len(folds))
+
+
+def fixed_out_of_sample(
+    factory: StrategyFactory,
+    params: dict,
+    bars: Sequence[Bar],
+    folds: Sequence[Fold],
+    config: BacktestConfig | None = None,
+    pit: PointInTimeSource | None = None,
+    warmup_bars: int = 300,
+) -> WalkForwardReport:
+    """Mêmes fenêtres de test que le walk-forward, paramètres fixés d'avance (aucune sélection).
+
+    Sert à comparer quelques valeurs d'un paramètre fenêtre par fenêtre ; chaque
+    valeur testée compte comme un essai de plus (``n_trials``).
+    """
+    bt = Backtester(config, pit)
+    out: list[FoldResult] = []
+    for fold in folds:
+        test, ts = slice_bars(bars, fold.test_start, fold.test_end, warmup_bars)
+        res = bt.run(factory(params), test, trade_start=ts)
+        out.append(FoldResult(fold, params, float("nan"), None, compute_metrics(res), res))
+    return WalkForwardReport(out, n_trials=len(folds))
 
 
 class HoldoutAlreadyUsed(RuntimeError):
