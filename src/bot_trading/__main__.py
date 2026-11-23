@@ -84,18 +84,7 @@ def cmd_backtest(args) -> int:
     from bot_trading.marketdata.synthetic import generate_bars, synthetic_bias
     from bot_trading.strategy import DecisionParams, DecisionStrategy
 
-    settings = Settings(mode=TradingMode.BACKTEST)
-    overrides = {k: v for k, v in (("max_leverage", args.leverage), ("max_loss_fraction_of_margin", args.max_margin_loss),
-                                   ("initial_capital_eur", args.capital)) if v is not None}
-    if overrides:
-        from dataclasses import replace as _replace
-
-        # Scénario de risque : backtest uniquement. La politique de risque (RiskLimits, paper trading) ne change pas.
-        settings = _replace(settings, risk=_replace(settings.risk, **overrides))
-        r = settings.risk
-        print(f"SCÉNARIO DE RISQUE (backtest seulement, pas la politique) : levier {r.max_leverage:g}:1, "
-              f"perte max {r.max_loss_fraction_of_margin:.0%} de la marge → stop max ≈ {r.max_loss_fraction_of_margin / r.max_leverage:.1%} du prix, "
-              f"capital {r.initial_capital_eur:g} €")
+    settings = _risk_scenario(Settings(mode=TradingMode.BACKTEST), args)
     # R19 (marge ≤ 50 % de l'equity) appliqué à toutes les stratégies : benchmarks comparables.
     config = BacktestConfig(settings=settings, default_risk_fraction=args.risk, max_margin_fraction=0.5)
     tf = Timeframe(args.timeframe)
@@ -218,8 +207,25 @@ def _store_backtest_data(args, settings, tf):
     return kept, InMemoryPointInTimeSource(regime_observations(hist)), note
 
 
+def _risk_scenario(settings, args):
+    """Scénario de risque : backtest uniquement. La politique de risque (RiskLimits, paper trading) ne change pas."""
+    overrides = {k: v for k, v in (("max_leverage", getattr(args, "leverage", None)),
+                                   ("max_loss_fraction_of_margin", getattr(args, "max_margin_loss", None)),
+                                   ("initial_capital_eur", getattr(args, "capital", None))) if v is not None}
+    if not overrides:
+        return settings
+    from dataclasses import replace as _replace
+
+    settings = _replace(settings, risk=_replace(settings.risk, **overrides))
+    r = settings.risk
+    print(f"SCÉNARIO DE RISQUE (backtest seulement, pas la politique) : levier {r.max_leverage:g}:1, "
+          f"perte max {r.max_loss_fraction_of_margin:.0%} de la marge → stop max ≈ {r.max_loss_fraction_of_margin / r.max_leverage:.1%} du prix, "
+          f"capital {r.initial_capital_eur:g} €")
+    return settings
+
+
 def cmd_decisions(args) -> int:
-    """Journal de décision de la stratégie complète (données synthétiques)."""
+    """Journal de décision de la stratégie complète : synthétique, ou réel avec ``--store`` (motifs des NO_TRADE)."""
     import json
     from collections import Counter
     from datetime import datetime, timezone
@@ -231,19 +237,42 @@ def cmd_decisions(args) -> int:
     from bot_trading.marketdata.synthetic import generate_bars, synthetic_bias
     from bot_trading.strategy import DecisionParams, DecisionStrategy
 
-    settings = Settings(mode=TradingMode.BACKTEST)
+    settings = _risk_scenario(Settings(mode=TradingMode.BACKTEST), args)
     tf = Timeframe(args.timeframe)
-    start = datetime(2018, 1, 1, tzinfo=timezone.utc)
-    end = start.replace(year=start.year + args.years)
-    bars, labels = generate_bars(start, end, tf, seed=args.seed)
-    pit = InMemoryPointInTimeSource(synthetic_bias(labels))
+    if args.store:
+        bars, pit, note = _store_backtest_data(args, settings, tf)
+        if not bars:
+            return 1
+    else:
+        start = datetime(2018, 1, 1, tzinfo=timezone.utc)
+        end = start.replace(year=start.year + args.years)
+        bars, labels = generate_bars(start, end, tf, seed=args.seed)
+        pit = InMemoryPointInTimeSource(synthetic_bias(labels))
+        note = None
+        print(f"Données SYNTHÉTIQUES (graine {args.seed}), {len(bars)} bougies {tf.value} : ce ne sont pas des résultats de marché.")
     config = BacktestConfig(settings=settings, max_margin_fraction=0.5)
     res = Backtester(config, pit).run(DecisionStrategy(settings, decision=DecisionParams(base_risk_fraction=args.risk)), bars)
-    print(f"Données SYNTHÉTIQUES (graine {args.seed}), {len(bars)} bougies {tf.value} : ce ne sont pas des résultats de marché.")
     stages = Counter((r.decision.action.value, r.decision.meta.get("stage", "")) for r in res.decisions)
-    print("\nDécisions par action et étage :")
+    total = sum(stages.values()) or 1
+    print("\nDécisions par action et étage (un refus est compté à l'étage qui l'a bloqué) :")
     for (action, stage), n in stages.most_common():
-        print(f"  {action:9} {stage:13} {n}")
+        print(f"  {action:9} {stage:13} {n:>7}  {n / total:6.1%}")
+    import re
+
+    def _motif(reason: str) -> str:
+        return re.sub(r"[-+]?\d+(?:[.,]\d+)?", "#", reason)[:90]
+
+    refusals = Counter((r.decision.meta.get("stage", ""), _motif(r.decision.reason)) for r in res.decisions if r.decision.action.value == "NO_TRADE")
+    print("\nMotifs de NO_TRADE les plus fréquents (chiffres remplacés par #) :")
+    for (stage, motif), n in refusals.most_common(args.top):
+        print(f"  {n:>7}  {stage:11} {motif}")
+    vetoes = Counter(r.outcome for r in res.decisions if r.outcome.startswith("VETO"))
+    if vetoes:
+        print("\nVetos du Risk Engine :")
+        for o, n in vetoes.most_common(args.top):
+            print(f"  {n:>7}  {o[:100]}")
+    if note:
+        print(note)
     shown = [r for r in res.decisions if r.decision.action.value != "NO_TRADE" or r.decision.meta.get("stage") not in ("fondamental", "D1", "H4")]
     print(f"\n{min(args.last, len(shown))} dernières décisions hors refus fondamental/D1/H4 :")
     for r in shown[-args.last:]:
@@ -561,6 +590,23 @@ def cmd_regime(args) -> int:
     return 0
 
 
+def _store_args(p) -> None:
+    """Options communes à backtest et decisions pour les données réelles du store."""
+    p.add_argument("--store", help="données RÉELLES : dossier du store Parquet (ex. data/store)")
+    p.add_argument("--source", default="dukascopy,capital", help="sources de bougies du store, par ordre de préférence")
+    p.add_argument("--start", help="début (AAAA-MM-JJ), mode --store")
+    p.add_argument("--spread", choices=["capital", "source"], default="capital", help="mode --store : coût Capital.com (défaut) ou spread de la source")
+    p.add_argument("--regime-cache", help="mode --store : JSONL des régimes déjà calculés (réutilisés)")
+    p.add_argument("--no-fundamental", action="store_true", help="mode --store : techniques et benchmarks seulement")
+    p.add_argument("--leverage", type=float, help="scénario : levier (défaut de la politique : 20)")
+    p.add_argument("--max-margin-loss", type=float, help="scénario : perte max par position en fraction de la marge (politique : 0.5)")
+    p.add_argument("--capital", type=float, help="scénario : capital initial en € (politique : 20)")
+    p.add_argument("--inflation-scoring", choices=["tendance", "niveau"], default="tendance",
+                    help="mode --store : F1 noté surtout sur la tendance (défaut) ou sur le niveau (ancienne notation)")
+    if not any(a.dest == 'holdout_months' for a in p._actions):
+        p.add_argument("--holdout-months", type=int, default=12)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="bot_trading")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -577,17 +623,7 @@ def main(argv: list[str] | None = None) -> int:
     bt.add_argument("--train-months", type=int, default=24)
     bt.add_argument("--test-months", type=int, default=6)
     bt.add_argument("--holdout-months", type=int, default=12)
-    bt.add_argument("--store", help="données RÉELLES : dossier du store Parquet (ex. data/store)")
-    bt.add_argument("--source", default="dukascopy,capital", help="sources de bougies du store, par ordre de préférence")
-    bt.add_argument("--start", help="début (AAAA-MM-JJ), mode --store")
-    bt.add_argument("--spread", choices=["capital", "source"], default="capital", help="mode --store : coût Capital.com (défaut) ou spread de la source")
-    bt.add_argument("--regime-cache", help="mode --store : JSONL des régimes déjà calculés (réutilisés)")
-    bt.add_argument("--no-fundamental", action="store_true", help="mode --store : techniques et benchmarks seulement")
-    bt.add_argument("--leverage", type=float, help="scénario : levier (défaut de la politique : 20)")
-    bt.add_argument("--max-margin-loss", type=float, help="scénario : perte max par position en fraction de la marge (politique : 0.5)")
-    bt.add_argument("--capital", type=float, help="scénario : capital initial en € (politique : 20)")
-    bt.add_argument("--inflation-scoring", choices=["tendance", "niveau"], default="tendance",
-                    help="mode --store : F1 noté surtout sur la tendance (défaut) ou sur le niveau (ancienne notation)")
+    _store_args(bt)
     dc = sub.add_parser("decisions")
     dc.add_argument("--timeframe", default="H1", choices=["M5", "M15", "H1"])
     dc.add_argument("--years", type=int, default=2)
@@ -596,6 +632,8 @@ def main(argv: list[str] | None = None) -> int:
     dc.add_argument("--last", type=int, default=15)
     dc.add_argument("--out", help="écrit le journal complet en JSONL")
     dc.add_argument("--publish", help="publie les décisions pour le dashboard (ex. data/runtime/decisions.jsonl)")
+    dc.add_argument("--top", type=int, default=15, help="nombre de motifs de refus affichés")
+    _store_args(dc)
     db = sub.add_parser("dashboard", help="dashboard Streamlit en lecture seule")
     db.add_argument("--demo", action="store_true", help="données synthétiques (data/demo)")
     db.add_argument("--demo-dir", default="data/demo")

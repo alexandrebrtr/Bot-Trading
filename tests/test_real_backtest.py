@@ -141,3 +141,12 @@ def test_cli_risk_scenario_is_backtest_only(capsys):
     out = capsys.readouterr().out
     assert "SCÉNARIO DE RISQUE" in out and "levier 10:1" in out and "≈ 5.0% du prix" in out
     assert RiskLimits().max_leverage == 20.0  # la politique par défaut est intacte
+
+
+def test_cli_decisions_on_store_counts_refusal_reasons(tmp_path, capsys):
+    store = to_store(build_store(), tmp_path / "store")
+    _write_bars(store, datetime(2026, 6, 1, tzinfo=UTC), datetime(2026, 11, 20, tzinfo=UTC))
+    assert cli(["decisions", "--store", str(tmp_path / "store"), "--holdout-months", "1", "--leverage", "10"]) == 0
+    out = capsys.readouterr().out
+    assert "RÉELLES" in out and "Motifs de NO_TRADE" in out and "SCÉNARIO DE RISQUE" in out
+    assert "Réserve finale non ouverte : 2026-10-20" in out
