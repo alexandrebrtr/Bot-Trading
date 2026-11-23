@@ -141,7 +141,8 @@ class DecisionEngine:
         if fund.event_blackout:
             return self._no_trade("fondamental", "Fenêtre d'annonce macro (F11)", fund, "NON_EVALUE")
         if fund.regime == RISK_OFF or not fund.allow_new_entries:
-            return self._no_trade("fondamental", f"Pas de nouvelle entrée : {fund.describe()} (F10)", fund, "NON_EVALUE")
+            why = f" ; {fund.overrides[-1]}" if fund.overrides else ""
+            return self._no_trade("fondamental", f"Pas de nouvelle entrée : {fund.describe()}{why} (F10)", fund, "NON_EVALUE")
         if fund.bias == "bearish":
             return self._no_trade("fondamental", f"Biais fondamental baissier : {fund.describe()}", fund, "NON_EVALUE")
         if fund.size_multiplier <= 0:
