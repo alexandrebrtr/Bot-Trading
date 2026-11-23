@@ -47,6 +47,11 @@ class ObstacleReport:
     def describe(self) -> str:
         if self.first is None:
             return "Aucun obstacle identifié au-dessus de l'entrée"
+        if self.first.bottom <= self.entry:
+            return (
+                f"Entrée {self.entry:.1f} déjà dans la zone vendeuse {self.first.name} "
+                f"{self.first.bottom:.1f}-{self.first.top:.1f} : place nulle (minimum {self.min_room_r:g} R)"
+            )
         return (
             f"Premier obstacle {self.first.name} à {self.first.bottom:.1f} : "
             f"{self.room_points:.1f} pts = {self.room_r:.2f} R"

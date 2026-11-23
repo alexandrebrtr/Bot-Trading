@@ -150,3 +150,34 @@ def test_cli_decisions_on_store_counts_refusal_reasons(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "RÉELLES" in out and "Motifs de NO_TRADE" in out and "SCÉNARIO DE RISQUE" in out
     assert "Réserve finale non ouverte : 2026-10-20" in out
+
+
+def test_extension_grid_parsing():
+    import math
+
+    from bot_trading.__main__ import _extension_grid
+
+    assert _extension_grid("3, 4.5,off") == [3.0, 4.5, math.inf]
+
+
+def test_fixed_out_of_sample_uses_only_test_windows():
+    from bot_trading.backtest.strategies import BuyAndHold
+    from bot_trading.backtest.validation import fixed_out_of_sample, walk_forward_folds
+    from bot_trading.core.models import Timeframe
+    from bot_trading.marketdata.synthetic import generate_bars
+
+    bars, _ = generate_bars(datetime(2018, 1, 1, tzinfo=UTC), datetime(2019, 1, 1, tzinfo=UTC), Timeframe.H1, seed=4)
+    folds, _ = walk_forward_folds(bars[0].time, bars[-1].time, train_months=3, test_months=3, step_months=3, holdout_months=0)
+    rep = fixed_out_of_sample(lambda p: BuyAndHold(), {}, bars, folds)
+    assert len(rep.folds) == len(folds) and rep.n_trials == len(folds)
+    for f in rep.folds:
+        assert f.in_sample is None
+        assert all(f.fold.test_start <= t.trade.opened_at < f.fold.test_end for t in f.oos_result.trades)
+
+
+def test_cli_extension_study_on_synthetic(capsys):
+    args = ["backtest", "--years", "3", "--train-months", "12", "--test-months", "6", "--holdout-months", "6", "--extension-grid", "3,off"]
+    assert cli(args) == 0
+    out = capsys.readouterr().out
+    assert "Entrée tardive (T3)" in out and "| désactivé |" in out and "| 3 |" in out and "Buy & hold (repère)" in out
+    assert "Sélection walk-forward" in out and "Walk-forward (technique FVG)" not in out

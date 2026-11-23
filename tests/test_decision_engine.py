@@ -258,6 +258,7 @@ def test_obstacle_room_in_r_atr_and_spreads():
     assert not tight.passed
     inside = check_obstacles(eng, entry=5095, stop=5085, spread=0.5, atr=10)
     assert inside.room_points == 0 and not inside.passed
+    assert "déjà dans la zone vendeuse FVG_BEAR_H1" in inside.describe()
 
 
 # ------------------------------------------------------------------ positions swing
