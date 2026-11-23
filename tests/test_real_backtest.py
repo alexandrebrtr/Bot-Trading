@@ -88,3 +88,25 @@ def test_cli_store_backtest_keeps_holdout_closed(tmp_path, capsys):
 
 def test_cli_store_backtest_without_bars(tmp_path, capsys):
     assert cli(["backtest", "--store", str(tmp_path / "vide")]) == 1
+
+
+def test_equity_component_is_wired_to_the_store(tmp_path):
+    """Sans CIK ni univers, la composante « entreprises » était toujours vide."""
+    from bot_trading.marketdata.pit import _engine
+    from bot_trading.marketdata.universe import TOP_CIKS, TOP_TICKERS
+
+    store = ParquetStore(tmp_path / "s")
+    assert StorePITData(store).ticker_ciks["AAPL"] == TOP_CIKS["AAPL"] == "320193"
+    eng = _engine(store)
+    assert eng.equity_agent.fallback_universe == list(TOP_TICKERS)
+    rows = []
+    for i, (ps, pe) in enumerate([(date(2026, 3, 29), date(2026, 6, 28)), (date(2026, 6, 29), date(2026, 9, 27))]):
+        filed = datetime(2026, 8 + 3 * i, 1, 21, tzinfo=UTC)
+        for concept, v in (("Revenues", 90e9 + i * 5e9), ("EarningsPerShareDiluted", 1.4 + i * 0.2)):
+            rows.append({"cik": 320193, "taxonomy": "us-gaap", "concept": concept, "unit": "USD", "period_start": ps, "period_end": pe,
+                         "accession_number": f"a{i}", "value": v, "event_time": datetime(pe.year, pe.month, pe.day, tzinfo=UTC), "available_at": filed})
+    DataEngine(store).ingest(rows, prov("fundamentals.edgar.facts", ASOF), ("cik", "taxonomy", "concept", "unit", "period_start", "period_end", "accession_number"),
+                             DatasetSpec("fundamentals.edgar.facts", "quarterly"))
+    reps = StorePITData(store).earnings(ASOF, "AAPL")
+    assert [r.period_end for r in reps] == [date(2026, 6, 28), date(2026, 9, 27)]
+    assert StorePITData(store).earnings(datetime(2026, 9, 1, tzinfo=UTC), "AAPL")[-1].period_end == date(2026, 6, 28)

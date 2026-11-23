@@ -20,7 +20,7 @@ from bot_trading.marketdata.http import SourceHTTPError
 from bot_trading.marketdata.storage import ParquetStore
 
 # Grosses pondérations suivies par défaut (tickers ; CIK résolus via company_tickers.json).
-TOP_TICKERS = ("NVDA", "MSFT", "AAPL", "AMZN", "GOOGL", "META", "AVGO", "BRK-B", "TSLA", "JPM")
+from bot_trading.marketdata.universe import TOP_CIKS, TOP_TICKERS
 
 
 def _report(label: str, res) -> None:
@@ -132,6 +132,9 @@ def refresh(engine: DataEngine, source: str, args: argparse.Namespace) -> None:
             if cik is None:
                 print(f"{ticker}: CIK introuvable")
                 continue
+            known = TOP_CIKS.get(ticker.upper())
+            if known is not None and str(cik) != known:
+                print(f"ATTENTION : {ticker} a le CIK {cik} à la SEC, {known} dans universe.py (à corriger)")
             filings, prov = src.filings(cik)
             _report(f"{prov.dataset} {ticker}", engine.ingest_edgar_filings(filings, prov))
             acc = {f["accession_number"]: f["available_at"] for f in filings}
