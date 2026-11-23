@@ -1,6 +1,6 @@
 """Configuration centralisée.
 
-Les valeurs par défaut reprennent la mission (US500, 20 EUR, levier 20:1,
+Les valeurs par défaut reprennent la mission (US500, 20 EUR, levier 10:1 (20:1 jusqu'en 2026-11),
 0,01 lot, exposition max 1 lot, stop garanti obligatoire, shorts désactivés,
 perte max 50 % de la marge engagée, drawdown max 50 %).
 
@@ -59,7 +59,7 @@ class BrokerCosts:
 @dataclass(frozen=True)
 class RiskLimits:
     initial_capital_eur: float = 20.0
-    max_leverage: float = 20.0
+    max_leverage: float = 10.0
     max_total_exposure_lots: float = 1.0
     # Perte maximale par position : fraction de la marge engagée.
     max_loss_fraction_of_margin: float = 0.5

@@ -114,7 +114,7 @@ Variantes d'entrée à tester (voir `EXPERIMENTS.md`) : retour dans le FVG, miti
 | E1 | Setups identifiés en H1/H4, confirmés en M15 ou M5. | ✅ |
 | E2 | Confirmation M15 : retour dans la zone + bougie de rejet (mèche basse ≥ p % du range) **ou** micro-BOS haussier M15. | 🧪 (p 🎛️) |
 | E3 | Exécution M5 : ordre au marché à la clôture de la bougie de confirmation, ou ordre limite dans la zone. | 🧪 |
-| E4 | Stop garanti sous l'invalidation technique (bas de la zone − buffer), jamais plus loin que la limite de `RISK_POLICY.md` (≈ 2,5 % du prix). Si l'invalidation est plus loin : `NO_TRADE`. | ✅ |
+| E4 | Stop garanti sous l'invalidation technique (bas de la zone − buffer), jamais plus loin que la limite de `RISK_POLICY.md` (≈ 5 % du prix au levier 10). Si l'invalidation est plus loin : `NO_TRADE`. | ✅ |
 | E5 | Pas d'entrée si spread > s × spread médian ou hors des heures de cotation normales. | 🎛️ s ∈ [1,5 ; 3] |
 | E6 | R:R potentiel minimal jusqu'à la prochaine résistance. | 🎛️ ∈ [1,5 ; 4] |
 

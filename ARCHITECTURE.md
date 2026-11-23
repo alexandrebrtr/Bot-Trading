@@ -228,7 +228,7 @@ Pipeline, chaque étage pouvant répondre `NO_TRADE` (champ `meta["stage"]` du j
 | 2 | D1 | T1 (close > EMA, pente +, structure non baissière), T3 (extension ≤ k ATR) | « Tendance D1 neutral » |
 | 3 | H4 | T2 : dernier BOS haussier | « Structure H4 bearish » |
 | 4 | setup / confirmation | Zone FVG ou OB haussière H1/H4 active, âge ≤ max, qualité ≥ seuil du régime (0,5 en `RISK_ON`, 0,8 en `NEUTRE`, 0,9 si DD ≥ 35 %), réaction mesurable sur le TF de confirmation selon la variante (`touch`, `half`, `full_reject`, `bos`) | « Zone FVG_H1 en jeu, pas de confirmation » |
-| 5 | exécution | E4/R8/R11 : stop sous la zone − buffer ATR, ≤ 2,5 % du prix ; R10 : distance minimale ; E5 : spread ≤ s × médiane | « Invalidation trop lointaine » |
+| 5 | exécution | E4/R8/R11 : stop sous la zone − buffer ATR, ≤ 0,5 / levier du prix (5 % à 10:1) ; R10 : distance minimale ; E5 : spread ≤ s × médiane | « Invalidation trop lointaine » |
 | 6 | obstacles | T4/E6 : place jusqu'au premier obstacle ≥ min R | « Potentiel insuffisant : … = 0,8 R » |
 | 7 | sizing | R9 : base × multiplicateur du régime × palier R17 ; R15, R5, R19 | `SIZE_BELOW_MIN` |
 | 8 | risk_veto | `RiskEngine.check_order` sur l'ordre estimé | « Veto du Risk Engine : KILL_SWITCH » |
@@ -273,7 +273,7 @@ Règles (toutes évaluées, toutes listées en cas de veto) :
 | Take profit du mauvais côté | `TAKE_PROFIT_WRONG_SIDE` |
 | Taille < 0,01 ou hors pas | `INVALID_SIZE` |
 | Exposition cumulée > 1 lot | `EXPOSURE_EXCEEDED` |
-| Marge requise (levier 20) > marge disponible | `INSUFFICIENT_MARGIN` |
+| Marge requise (levier 10) > marge disponible | `INSUFFICIENT_MARGIN` |
 | Spread trop large, données périmées, marché fermé, fenêtre d'annonce macro | `SPREAD_TOO_WIDE`, `STALE_DATA`, `MARKET_CLOSED`, `EVENT_BLACKOUT` |
 
 ## Broker simulé : hypothèses à calibrer

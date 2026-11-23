@@ -4,6 +4,9 @@ from datetime import timedelta
 import pytest
 
 from bot_trading.config import BrokerCosts, InstrumentSpec, RiskLimits
+
+# Les montants de ces tests sont calculés à la main au levier 20 (politique jusqu'en 2026-11).
+LEV20 = 20.0
 from bot_trading.core.models import Direction, OrderRequest
 from bot_trading.risk.engine import AccountState, MarketState, RiskEngine, Violation
 
@@ -13,7 +16,7 @@ EURUSD = 1.0
 
 
 def engine(**limits):
-    return RiskEngine(RiskLimits(**limits), InstrumentSpec(), BrokerCosts())
+    return RiskEngine(RiskLimits(**{"max_leverage": LEV20, **limits}), InstrumentSpec(), BrokerCosts())
 
 
 def account(equity=20.0, peak=20.0, used=0.0, lots=0.0, open_risk=0.0):
@@ -65,7 +68,7 @@ def test_max_loss_50pct_of_margin():
 
 
 def test_max_loss_includes_gsl_premium():
-    e = RiskEngine(RiskLimits(), InstrumentSpec(), BrokerCosts(guaranteed_stop_premium_points=5))
+    e = RiskEngine(RiskLimits(max_leverage=LEV20), InstrumentSpec(), BrokerCosts(guaranteed_stop_premium_points=5))
     d = e.check_order(order(stop=6800.6 - 168.0), account(), market())
     assert Violation.MAX_LOSS_EXCEEDED in d.violations
 

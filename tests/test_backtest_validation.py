@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from bot_trading.config import RiskLimits, Settings, TradingMode
 from bot_trading.backtest.engine import Backtester, BacktestConfig
 from bot_trading.backtest.lookahead import check_future_independence, check_prefix_invariance
 from bot_trading.backtest.metrics import (
@@ -223,7 +224,10 @@ def test_holdout_opens_once(tmp_path, market):
 
 def test_stress_costs_hurt(market):
     bars, _, _ = market
-    out = run_stress(lambda p: BuyAndHold(), {}, bars)
+    # Buy & hold avec stop à 95 % de la distance max : la comparaison dépend du chemin
+    # (stoppé ou non) ; montants vérifiés au levier 20.
+    cfg = BacktestConfig(settings=Settings(mode=TradingMode.BACKTEST, risk=RiskLimits(max_leverage=20.0)))
+    out = run_stress(lambda p: BuyAndHold(cfg.settings), {}, bars, cfg)
     assert out["financement_x2"].funding_eur > out["base"].funding_eur
     assert out["spread_x2"].net_pnl_eur <= out["base"].net_pnl_eur + 1e-9
     assert set(out) >= {"base", "spread_x2", "spread_x3", "prime_gsl_1pt", "eurusd_1.30", "cumul_defavorable"}

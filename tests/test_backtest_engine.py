@@ -12,7 +12,7 @@ from bot_trading.backtest.engine import (
     MultiTimeframe,
     PointInTimeView,
 )
-from bot_trading.config import BrokerCosts, InstrumentSpec, Settings, TradingMode
+from bot_trading.config import BrokerCosts, InstrumentSpec, RiskLimits, Settings, TradingMode
 from bot_trading.core.decision import Action, Decision
 from bot_trading.core.models import Candle, Timeframe
 from bot_trading.marketdata.candles import resample
@@ -47,7 +47,7 @@ def longs(res) -> list[str]:
 
 
 def settings(**costs) -> Settings:
-    return Settings(mode=TradingMode.BACKTEST, costs=BrokerCosts(**costs))
+    return Settings(mode=TradingMode.BACKTEST, costs=BrokerCosts(**costs), risk=RiskLimits(max_leverage=20.0))  # montants au levier 20
 
 
 def test_entry_at_next_open_not_signal_close():

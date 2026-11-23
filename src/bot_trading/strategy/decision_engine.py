@@ -44,7 +44,7 @@ ENTRY_CONDITIONS = (
     "D1 haussier (close > EMA, pente positive, structure non baissière) et extension ≤ k ATR",
     "H4 : dernier BOS haussier",
     "Zone H1/H4 (FVG ou OB haussier) touchée puis réaction mesurable en M15/M5",
-    "Stop garanti sous l'invalidation à ≤ 2,5 % du prix (R8)",
+    "Stop garanti sous l'invalidation à ≤ 0,5 / levier du prix (5 % à 10:1, R8)",
     "Place jusqu'au premier obstacle ≥ min R, spread normal",
     "Taille ≥ 0,01 lot dans les limites du Risk Engine",
 )

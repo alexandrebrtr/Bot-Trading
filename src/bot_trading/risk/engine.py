@@ -14,7 +14,7 @@ ne doit pas dépasser ``max_loss_fraction_of_margin`` (50 %) de la marge engagé
 Comme perte et marge sont toutes deux proportionnelles à la taille, cette règle
 revient à une distance de stop maximale indépendante de la taille :
 
-    distance_max = 0,5 × prix / levier   (≈ 2,5 % du prix avec un levier de 20)
+    distance_max = 0,5 × prix / levier   (≈ 5 % du prix avec un levier de 10)
 
 Règle de risque maximal par trade
 ---------------------------------
