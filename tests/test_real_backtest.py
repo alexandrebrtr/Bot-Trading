@@ -181,3 +181,22 @@ def test_cli_extension_study_on_synthetic(capsys):
     out = capsys.readouterr().out
     assert "Entrée tardive (T3)" in out and "| désactivé |" in out and "| 3 |" in out and "Buy & hold (repère)" in out
     assert "Sélection walk-forward" in out and "Walk-forward (technique FVG)" not in out
+
+
+def test_cli_entry_study_lists_variants(capsys):
+    args = ["backtest", "--years", "3", "--train-months", "12", "--test-months", "6", "--holdout-months", "6", "--entry-study", "--no-selection"]
+    assert cli(args) == 0
+    out = capsys.readouterr().out
+    assert "Entrées plus fréquentes (EXP-14) (H1)" in out
+    for name in ("| actuel |", "| H4 non exigé |", "| confirmation touch |", "| H4 non exigé + touch |"):
+        assert name in out
+    assert "Sélection walk-forward non lancée" in out
+
+
+def test_entry_variants_build_valid_strategies():
+    from bot_trading.__main__ import ENTRY_VARIANTS
+    from bot_trading.strategy import DecisionParams, DecisionStrategy, TechnicalParams
+
+    for v in ENTRY_VARIANTS.values():
+        s = DecisionStrategy(technical=TechnicalParams(**v.get("technical", {})), decision=DecisionParams(**v.get("decision", {})))
+        assert s is not None

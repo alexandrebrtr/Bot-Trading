@@ -33,6 +33,7 @@
 | EXP-11 | Le ton de la Fed (classifieur) ajoute de l'information au-delà des taux 2 ans | Score F4 on/off | Gain hors échantillon | 🧪 |
 | EXP-12 | Écart Dukascopy / Capital.com acceptable | Signaux sur la période commune | ≥ 90 % de signaux identiques | 🏦 |
 | EXP-13 | Le filtre d'entrée tardive T3 (extension D1 > 3 ATR, 1er motif de refus : ~22 % des heures sur 2018-2025) écarte les meilleures tendances haussières | `backtest --store … --extension-grid 3,4,6,off` : valeurs fixes sur les fenêtres de test, puis sélection walk-forward | Critères communs ; sinon garder 3 | 🧪 |
+| EXP-14 | Le Decision Engine peut trader plus souvent sans perdre son espérance | `backtest --store … --entry-study` en H1 puis `--timeframe M15` (confirmation réelle en M15) : actuel, H4 non exigé, confirmation `touch`, les deux | ≥ 30 trades OOS et critères communs ; sinon garder l'actuel | 🧪 |
 
 Exécution : EXP-01, EXP-03, EXP-04, EXP-07 et EXP-08 se lancent désormais sur la stratégie complète (`bot_trading.strategy.DecisionStrategy`) en faisant varier `TechnicalParams` (variante d'entrée, timeframes du setup), `ExitParams` (méthodes de sortie) et `DecisionParams` (risque, TP). `python -m bot_trading backtest --walk-forward` lance déjà la grille EXP-03 (4 variantes d'entrée = 4 essais à compter).
 
