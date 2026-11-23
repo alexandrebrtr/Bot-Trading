@@ -85,6 +85,17 @@ def cmd_backtest(args) -> int:
     from bot_trading.strategy import DecisionParams, DecisionStrategy
 
     settings = Settings(mode=TradingMode.BACKTEST)
+    overrides = {k: v for k, v in (("max_leverage", args.leverage), ("max_loss_fraction_of_margin", args.max_margin_loss),
+                                   ("initial_capital_eur", args.capital)) if v is not None}
+    if overrides:
+        from dataclasses import replace as _replace
+
+        # Scénario de risque : backtest uniquement. La politique de risque (RiskLimits, paper trading) ne change pas.
+        settings = _replace(settings, risk=_replace(settings.risk, **overrides))
+        r = settings.risk
+        print(f"SCÉNARIO DE RISQUE (backtest seulement, pas la politique) : levier {r.max_leverage:g}:1, "
+              f"perte max {r.max_loss_fraction_of_margin:.0%} de la marge → stop max ≈ {r.max_loss_fraction_of_margin / r.max_leverage:.1%} du prix, "
+              f"capital {r.initial_capital_eur:g} €")
     # R19 (marge ≤ 50 % de l'equity) appliqué à toutes les stratégies : benchmarks comparables.
     config = BacktestConfig(settings=settings, default_risk_fraction=args.risk, max_margin_fraction=0.5)
     tf = Timeframe(args.timeframe)
@@ -572,6 +583,9 @@ def main(argv: list[str] | None = None) -> int:
     bt.add_argument("--spread", choices=["capital", "source"], default="capital", help="mode --store : coût Capital.com (défaut) ou spread de la source")
     bt.add_argument("--regime-cache", help="mode --store : JSONL des régimes déjà calculés (réutilisés)")
     bt.add_argument("--no-fundamental", action="store_true", help="mode --store : techniques et benchmarks seulement")
+    bt.add_argument("--leverage", type=float, help="scénario : levier (défaut de la politique : 20)")
+    bt.add_argument("--max-margin-loss", type=float, help="scénario : perte max par position en fraction de la marge (politique : 0.5)")
+    bt.add_argument("--capital", type=float, help="scénario : capital initial en € (politique : 20)")
     bt.add_argument("--inflation-scoring", choices=["tendance", "niveau"], default="tendance",
                     help="mode --store : F1 noté surtout sur la tendance (défaut) ou sur le niveau (ancienne notation)")
     dc = sub.add_parser("decisions")

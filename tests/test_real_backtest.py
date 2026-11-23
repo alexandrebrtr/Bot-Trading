@@ -132,3 +132,12 @@ def test_cli_store_backtest_accepts_old_inflation_scoring(tmp_path, capsys):
     _write_bars(store, datetime(2026, 6, 1, tzinfo=UTC), datetime(2026, 11, 20, tzinfo=UTC))
     assert cli(["backtest", "--store", str(tmp_path / "store"), "--holdout-months", "1", "--inflation-scoring", "niveau"]) == 0
     assert "Notation de l'inflation : niveau" in capsys.readouterr().out
+
+
+def test_cli_risk_scenario_is_backtest_only(capsys):
+    from bot_trading.config import RiskLimits
+
+    assert cli(["backtest", "--years", "1", "--leverage", "10", "--max-margin-loss", "0.5"]) == 0
+    out = capsys.readouterr().out
+    assert "SCÉNARIO DE RISQUE" in out and "levier 10:1" in out and "≈ 5.0% du prix" in out
+    assert RiskLimits().max_leverage == 20.0  # la politique par défaut est intacte
