@@ -194,7 +194,7 @@ def _store_backtest_data(args, settings, tf):
 
         macro_config = MacroConfig.level_first()
     print(f"Notation de l'inflation : {args.inflation_scoring}"
-          f"{" (utiliser un cache des régimes propre à cette notation)" if args.regime_cache else ""}")
+          f"{' (utiliser un cache des régimes propre à cette notation)' if args.regime_cache else ''}")
     hist = regime_history(store, kept[0].time, holdout_start, cache_path=args.regime_cache, progress=progress, macro_config=macro_config)
     if hist:
         from collections import Counter
