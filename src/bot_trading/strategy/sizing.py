@@ -36,7 +36,7 @@ class SizingResult:
 
 
 def max_stop_distance(entry: float, limits: RiskLimits, costs: BrokerCosts) -> float:
-    """R8 : distance de stop maximale (points), prime déduite. ≈ 2,5 % du prix à 20:1."""
+    """R8 : distance de stop maximale (points), prime déduite. ≈ 5 % du prix à 10:1."""
     return limits.max_loss_fraction_of_margin * entry / limits.max_leverage - costs.guaranteed_stop_premium_points
 
 
@@ -70,10 +70,12 @@ def size_for_risk(
     size = contract.floor_size(budget / (loss_pts * vpp1), spec)
     room = contract.floor_size(limits.max_total_exposure_lots - open_exposure_lots, spec)
     size = min(size, room)
-    if max_margin_fraction is not None:
-        per_lot = contract.margin_eur(1.0, entry, spec, eurusd, limits.max_leverage)
-        allowed = max_margin_fraction * max(equity_eur, 0.0) - used_margin_eur
-        size = min(size, contract.floor_size(max(allowed, 0.0) / per_lot, spec))
+    # La marge disponible plafonne toujours la taille (sinon le Risk Engine oppose
+    # INSUFFICIENT_MARGIN au lieu d'une taille réduite) ; max_margin_fraction resserre.
+    margin_fraction = 1.0 if max_margin_fraction is None else min(max_margin_fraction, 1.0)
+    per_lot = contract.margin_eur(1.0, entry, spec, eurusd, limits.max_leverage)
+    allowed = margin_fraction * max(equity_eur, 0.0) - used_margin_eur
+    size = min(size, contract.floor_size(max(allowed, 0.0) / per_lot, spec))
     if size < spec.min_size:
         return fail("SIZE_BELOW_MIN")
     return SizingResult(

@@ -131,11 +131,17 @@ def test_margin_cap_in_backtester_sizing():
     bars, _ = generate_bars(START + timedelta(days=1), START + timedelta(days=3), Timeframe.H1, seed=3)
     free = Backtester(BacktestConfig(settings=SETTINGS), None).run(OneLong(), bars)
     capped = Backtester(CONFIG, None).run(OneLong(), bars)
-    # Sans plafond : la taille visée dépasse la marge disponible et le Risk Engine oppose son veto.
-    assert not free.trades and any("INSUFFICIENT_MARGIN" in d.outcome for d in free.decisions)
-    assert capped.trades
-    m = contract.margin_eur(capped.trades[0].trade.size, capped.trades[0].trade.entry_price, SETTINGS.instrument, SETTINGS.default_eurusd, 20)
-    assert m <= 10.0 + 1e-9
+    lev = SETTINGS.risk.max_leverage
+
+    def margin(res):
+        t = res.trades[0].trade
+        return contract.margin_eur(t.size, t.entry_price, SETTINGS.instrument, SETTINGS.default_eurusd, lev)
+
+    # Sans plafond explicite : la taille est réduite à la marge disponible (pas de veto INSUFFICIENT_MARGIN).
+    assert free.trades and not any("INSUFFICIENT_MARGIN" in d.outcome for d in free.decisions)
+    assert margin(free) <= SETTINGS.risk.initial_capital_eur + 1e-9
+    assert capped.trades and margin(capped) <= 10.0 + 1e-9
+    assert capped.trades[0].trade.size <= free.trades[0].trade.size
 
 
 def test_cli_publishes_decisions_for_dashboard(tmp_path):

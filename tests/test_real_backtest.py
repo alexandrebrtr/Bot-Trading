@@ -140,7 +140,7 @@ def test_cli_risk_scenario_is_backtest_only(capsys):
     assert cli(["backtest", "--years", "1", "--leverage", "10", "--max-margin-loss", "0.5"]) == 0
     out = capsys.readouterr().out
     assert "SCÉNARIO DE RISQUE" in out and "levier 10:1" in out and "≈ 5.0% du prix" in out
-    assert RiskLimits().max_leverage == 20.0  # la politique par défaut est intacte
+    assert RiskLimits().max_leverage == 10.0  # la politique par défaut est intacte
 
 
 def test_cli_decisions_on_store_counts_refusal_reasons(tmp_path, capsys):

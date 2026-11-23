@@ -4,14 +4,17 @@ from datetime import timedelta
 import pytest
 
 from bot_trading.broker.simulated import SimulatedBroker
-from bot_trading.config import BrokerCosts, Settings
+from bot_trading.config import BrokerCosts, RiskLimits, Settings
 from bot_trading.core.models import Candle, Direction, OrderRequest, Quote
 
 from conftest import T0
 
+# Montants (marge, stop-out) calculés à la main au levier 20 ; la politique par défaut est 10.
+S20 = Settings(risk=RiskLimits(max_leverage=20.0))
+
 
 def broker(**costs):
-    s = Settings()
+    s = S20
     s = replace(s, costs=replace(BrokerCosts(overnight_long_rate_daily=0.0), **costs))
     b = SimulatedBroker(s, eurusd=1.0)
     b.on_quote(Quote(T0, 6800.0, 6800.6))
@@ -88,7 +91,7 @@ def test_quote_triggers_stop():
 
 
 def test_overnight_funding_and_friday_triple():
-    s = replace(Settings(), costs=BrokerCosts(overnight_long_rate_daily=0.0001, funding_hour_utc=22))
+    s = replace(S20, costs=BrokerCosts(overnight_long_rate_daily=0.0001, funding_hour_utc=22))
     b = SimulatedBroker(s, eurusd=1.0)
     b.on_quote(Quote(T0, 6800.0, 6800.6))  # lundi 14h
     buy(b, stop=6700)
@@ -102,7 +105,7 @@ def test_overnight_funding_and_friday_triple():
 
 
 def test_exposure_cap_across_orders():
-    s = replace(Settings(), risk=replace(Settings().risk, initial_capital_eur=10_000))
+    s = replace(S20, risk=replace(S20.risk, initial_capital_eur=10_000))
     b = SimulatedBroker(s, eurusd=1.0)
     b.on_quote(Quote(T0, 6800.0, 6800.6))
     assert b.place_market_order(OrderRequest("US500", Direction.BUY, 0.6, 6750, True)).accepted
@@ -112,7 +115,7 @@ def test_exposure_cap_across_orders():
 
 def test_drawdown_halt_closes_and_blocks():
     # risque par trade relevé à 50 % de l'equity : ce test vise le drawdown, pas cette règle
-    s = replace(Settings(), risk=replace(Settings().risk, initial_capital_eur=5.0, max_risk_fraction_of_equity=0.5))
+    s = replace(S20, risk=replace(S20.risk, initial_capital_eur=5.0, max_risk_fraction_of_equity=0.5))
     b = SimulatedBroker(s, eurusd=1.0)
     b.on_quote(Quote(T0, 6800.0, 6800.6))
     assert buy(b, stop=6640.6).accepted
@@ -128,8 +131,8 @@ def test_drawdown_halt_closes_and_blocks():
 def test_stop_out_when_margin_level_too_low():
     # sans stop garanti et avec un stop lointain, la marge s'épuise avant le stop
     s = replace(
-        Settings(),
-        risk=replace(Settings().risk, require_guaranteed_stop=False, max_loss_fraction_of_margin=100, max_risk_fraction_of_equity=1.0, max_account_drawdown=1.0),
+        S20,
+        risk=replace(S20.risk, require_guaranteed_stop=False, max_loss_fraction_of_margin=100, max_risk_fraction_of_equity=1.0, max_account_drawdown=1.0),
     )
     b = SimulatedBroker(s, eurusd=1.0)
     b.on_quote(Quote(T0, 6800.0, 6800.6))

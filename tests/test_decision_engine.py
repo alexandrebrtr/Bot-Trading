@@ -31,7 +31,8 @@ from bot_trading.strategy import (
 
 UTC = timezone.utc
 T0 = datetime(2026, 11, 3, 10, 0, tzinfo=UTC)
-SETTINGS = Settings(mode=TradingMode.BACKTEST)
+# Montants calculés au levier 20 (stop max ≈ 2,5 %) ; la politique par défaut est 10.
+SETTINGS = Settings(mode=TradingMode.BACKTEST, risk=RiskLimits(max_leverage=20.0))
 H1 = timedelta(hours=1)
 
 
@@ -163,7 +164,7 @@ def test_take_profit_modes():
 
 
 def test_size_for_risk_formula_and_caps():
-    spec, costs, limits = InstrumentSpec(), BrokerCosts(), RiskLimits()
+    spec, costs, limits = InstrumentSpec(), BrokerCosts(), RiskLimits(max_leverage=20.0)
     r = size_for_risk(equity_eur=20, entry=5000, stop=4970, risk_fraction=0.1, spec=spec, costs=costs, limits=limits, eurusd=1.16)
     expected = contract.floor_size(2.0 / (30 * contract.value_per_point_eur(1.0, spec, 1.16)), spec)
     assert r.ok and r.size == pytest.approx(expected)

@@ -14,7 +14,7 @@ l'entrée. L'absence d'opportunité conduit à `NO_TRADE`.
 
 | Composant | Module | État |
 |---|---|---|
-| Configuration (20 €, levier 20:1, 0,01 lot, 1 lot max) | `bot_trading.config` | ✅ |
+| Configuration (20 €, levier 10:1, 0,01 lot, 1 lot max) | `bot_trading.config` | ✅ |
 | Calculs de contrat (marge, notionnel, P&L EUR/USD) | `bot_trading.core.contract` | ✅ |
 | Risk Engine déterministe avec veto | `bot_trading.risk.engine` | ✅ |
 | Broker simulé type Capital.com | `bot_trading.broker.simulated` | ✅ |
@@ -181,10 +181,12 @@ Capital.com ne servent qu'à lire les prix et les caractéristiques du marché.
 
 ## Ordres de grandeur
 
-Avec l'US500 vers 6 800 points et un levier de 20 : 1 lot ≈ 340 € de marge,
-0,01 lot ≈ 3,4 €, 1 point = 0,01 $ en 0,01 lot. La règle « perte max 50 % de la
-marge engagée » limite la distance du stop garanti à environ 2,5 % du prix
-(≈ 170 points), quelle que soit la taille.
+Avec l'US500 vers 6 800 points et un levier de 10 (politique depuis 2026-11) :
+1 lot ≈ 680 € de marge, 0,01 lot ≈ 6,8 €, 1 point = 0,01 $ en 0,01 lot. La règle
+« perte max 50 % de la marge engagée » limite la distance du stop garanti à
+environ 5 % du prix (≈ 340 points), quelle que soit la taille. La taille est
+toujours réduite à la marge disponible : avec 20 € et un stop serré, c'est la
+marge, pas le risque, qui borne la taille.
 
 ## Documentation
 

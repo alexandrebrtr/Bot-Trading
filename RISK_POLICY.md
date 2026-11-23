@@ -10,9 +10,9 @@
 |---|---|---|---|
 | R1 | Broker, instrument | Capital.com, CFD `US500` | ✅ |
 | R2 | Capital initial, devise | 20 €, EUR | ✅ |
-| R3 | Levier max et par défaut | 20:1 (marge 5 %) | ✅ / 🏦 |
+| R3 | Levier max et par défaut | 10:1 (marge 10 %) ; 20:1 jusqu'en 2026-11, abaissé après le backtest réel (drawdown divisé par deux) | ✅ / 🏦 |
 | R4 | Taille minimale et pas de taille | 0,01 lot, lus dans `dealingRules` au démarrage | 🏦 |
-| R5 | Exposition maximale cumulée | 1 lot (non atteignable sous ~340 € de capital) | ✅ |
+| R5 | Exposition maximale cumulée | 1 lot (non atteignable sous ~680 € de capital) | ✅ |
 | R6 | Direction | Long uniquement ; un ordre SELL d'ouverture est rejeté | ✅ |
 
 ## 2. Règles par position
@@ -20,7 +20,7 @@
 | # | Règle | Valeur | Statut |
 |---|---|---|---|
 | R7 | Stop loss garanti obligatoire, posé **dans le même ordre** que l'ouverture (`guaranteedStop=true`) | — | ✅ / 🏦 (obligation française) |
-| R8 | Perte max par position (stop + spread + prime GSL + conversion) | ≤ 50 % de la marge engagée ⇒ stop ≤ 2,5 % du prix à 20:1. **Plafond absolu, vérifié en premier.** | ✅ |
+| R8 | Perte max par position (stop + spread + prime GSL + conversion) | ≤ 50 % de la marge engagée ⇒ stop ≤ 5 % du prix à 10:1. **Plafond absolu, vérifié en premier.** | ✅ |
 | R9 | Perte max par position en % de l'equity courante, appliquée **après** R8 | ≤ **20 %** (plafond fixé par Alexandre) ; 🎛️ valeur effective entre 2 % et 20 % | ✅ |
 | R10 | Distance de stop ≥ `minGuaranteedStopDistance` ; si l'invalidation technique est plus proche, le stop est placé au minimum autorisé et le risque recalculé | — | 🏦 |
 | R11 | Si R8, R9 et la taille minimale sont incompatibles (stop trop loin) : `NO_TRADE`, jamais réduction du stop sous l'invalidation | — | ✅ |

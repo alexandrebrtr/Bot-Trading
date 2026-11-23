@@ -5,8 +5,8 @@ Conventions :
 - ``eurusd`` = nombre d'USD pour 1 EUR ; un montant USD se convertit en EUR par ``/ eurusd`` ;
 - 1 lot vaut ``value_per_point_per_lot`` USD par point.
 
-Ordre de grandeur (US500 ≈ 6 800, EUR/USD ≈ 1,0 à 1,2, levier 20) :
-1 lot ≈ 6 800 USD de notionnel, soit ≈ 290 à 340 EUR de marge ; 0,01 lot ≈ 3 EUR.
+Ordre de grandeur (US500 ≈ 6 800, EUR/USD ≈ 1,0 à 1,2, levier 10) :
+1 lot ≈ 6 800 USD de notionnel, soit ≈ 570 à 680 EUR de marge ; 0,01 lot ≈ 6 EUR.
 """
 
 from __future__ import annotations
