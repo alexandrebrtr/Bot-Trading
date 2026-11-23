@@ -118,19 +118,23 @@ def cmd_backtest(args) -> int:
     results = compare(factories, bars, config, pit)
     print(metrics_table(results))
 
-    ext_values = _extension_grid(args.extension_grid) if args.extension_grid else None
-    if ext_values and pit is None:
-        print("--extension-grid : biais fondamental requis (mode --store ou synthétique).", file=sys.stderr)
+    studies = []
+    if args.extension_grid:
+        studies.append((_extension_variants(_extension_grid(args.extension_grid)), "Entrée tardive (T3)", "Extension max (ATR D1)"))
+    if args.entry_study:
+        studies.append((ENTRY_VARIANTS, "Entrées plus fréquentes (EXP-14)", "Variante"))
+    if studies and pit is None:
+        print("--extension-grid / --entry-study : biais fondamental requis (mode --store ou synthétique).", file=sys.stderr)
         return 1
-    if args.walk_forward or ext_values:
+    if args.walk_forward or studies:
         # Mode store : la réserve est déjà retirée de ``bars`` (jamais lue ici).
         hold_m = 0 if args.store else args.holdout_months
         folds, holdout = walk_forward_folds(bars[0].time, bars[-1].time, args.train_months, args.test_months, args.test_months, hold_m)
         if not folds:
             print("Walk-forward : historique trop court pour une fenêtre.")
             return 0
-    if ext_values:
-        _extension_study(ext_values, settings, args, bars, folds, config, pit, fixed_out_of_sample, walk_forward)
+    for variants, title, column in studies:
+        _variant_study(variants, title, column, settings, args, bars, folds, config, pit, fixed_out_of_sample, walk_forward)
     if args.walk_forward:
         grid = {"mode": ["touch", "half", "full_reject"], "take_profit_r": [1.5, 2.0, 3.0]}
         rep = walk_forward(lambda p: FVGTechnical(settings, params=FVGEntryParams(**p)), grid, bars, folds, config, pit)
@@ -164,22 +168,41 @@ def _extension_grid(text: str) -> list[float]:
     return out
 
 
-def _extension_study(values, settings, args, bars, folds, config, pit, fixed_out_of_sample, walk_forward) -> None:
-    """T3 (extension max D1 en ATR) : chaque valeur sur les mêmes fenêtres de test, puis sélection walk-forward."""
+# EXP-14 : variantes d'entrée plus fréquentes (techniques seulement ; RiskLimits intactes).
+ENTRY_VARIANTS: dict[str, dict] = {
+    "actuel": {},
+    "H4 non exigé": {"decision": {"require_h4_bullish": False}},
+    "confirmation touch": {"technical": {"entry_mode": "touch"}},
+    "H4 non exigé + touch": {"decision": {"require_h4_bullish": False}, "technical": {"entry_mode": "touch"}},
+}
+
+
+def _extension_variants(values) -> dict[str, dict]:
+    return {(f"{v:g}" if math.isfinite(v) else "désactivé"): {"technical": {"max_extension_atr": v}} for v in values}
+
+
+def _variant_study(variants, title, column, settings, args, bars, folds, config, pit, fixed_out_of_sample, walk_forward) -> None:
+    """Chaque variante sur les mêmes fenêtres de test (sans sélection), buy & hold en repère, puis sélection walk-forward."""
     from bot_trading.backtest.strategies import BuyAndHold
     from bot_trading.strategy import DecisionParams, DecisionStrategy, TechnicalParams
 
     def factory(p):
-        return DecisionStrategy(settings, technical=TechnicalParams(**p), decision=DecisionParams(base_risk_fraction=args.risk))
+        v = variants[p["variante"]]
+        return DecisionStrategy(
+            settings,
+            technical=TechnicalParams(**v.get("technical", {})),
+            decision=DecisionParams(base_risk_fraction=args.risk, **v.get("decision", {})),
+        )
 
     def fmt(v, nd=2):
         return "—" if v is None else f"{v:+.{nd}f}" if isinstance(v, float) else str(v)
 
-    print(f"\nEntrée tardive (T3) : {len(values)} valeurs × {len(folds)} fenêtres de test "
+    tf = bars[0].timeframe.value if bars else "?"
+    print(f"\n{title} ({tf}) : {len(variants)} variantes × {len(folds)} fenêtres de test "
           f"({folds[0].test_start.date()} → {folds[-1].test_end.date()}), mêmes coûts et même Risk Engine.")
-    print("| Extension max (ATR D1) | Trades OOS | Espérance R | Profit factor | P&L net € | Fenêtres > 0 | Pire DD |")
+    print(f"| {column} | Trades OOS | Espérance R | Profit factor | P&L net € | Fenêtres > 0 | Pire DD |")
     print("|---|---|---|---|---|---|---|")
-    rows = [(f"{v:g}" if math.isfinite(v) else "désactivé", fixed_out_of_sample(factory, {"max_extension_atr": v}, bars, folds, config, pit)) for v in values]
+    rows = [(name, fixed_out_of_sample(factory, {"variante": name}, bars, folds, config, pit)) for name in variants]
     rows.append(("Buy & hold (repère)", fixed_out_of_sample(lambda p: BuyAndHold(settings), {}, bars, folds, config, pit)))
     for name, rep in rows:
         s = rep.summary()
@@ -187,12 +210,15 @@ def _extension_study(values, settings, args, bars, folds, config, pit, fixed_out
         pf = "—" if s["oos_profit_factor"] is None else format(s["oos_profit_factor"], ".2f")
         print(f"| {name} | {s['oos_trades']} | {fmt(s['oos_expectancy_r'])} | {pf} | "
               f"{s['oos_net_pnl_eur']:+.2f} | {s['oos_positive_folds']}/{s['folds']} | {'—' if dd is None else f'{dd:.1%}'} |")
-    rep = walk_forward(factory, {"max_extension_atr": values}, bars, folds, config, pit)
+    if args.no_selection:
+        print(f"Sélection walk-forward non lancée (--no-selection). Essais à reporter dans EXPERIMENTS.md : {len(variants) * len(folds)}.")
+        return
+    rep = walk_forward(factory, {"variante": list(variants)}, bars, folds, config, pit)
     s = rep.summary()
-    print(f"Sélection walk-forward (valeur choisie sur chaque fenêtre d'entraînement) : {s['oos_trades']} trades OOS, "
+    print(f"Sélection walk-forward (variante choisie sur chaque fenêtre d'entraînement) : {s['oos_trades']} trades OOS, "
           f"espérance {fmt(s['oos_expectancy_r'])} R, P&L {s['oos_net_pnl_eur']:+.2f} €, "
-          f"valeurs choisies {[p['max_extension_atr'] for p in s['params_by_fold']]}")
-    print(f"Essais à reporter dans EXPERIMENTS.md : {len(values) * len(folds) * 2} (valeurs fixes + sélection).")
+          f"choix {[p['variante'] for p in s['params_by_fold']]}")
+    print(f"Essais à reporter dans EXPERIMENTS.md : {len(variants) * len(folds) * 2} (variantes fixes + sélection).")
 
 
 def _store_backtest_data(args, settings, tf):
@@ -671,6 +697,9 @@ def main(argv: list[str] | None = None) -> int:
     bt.add_argument("--train-months", type=int, default=24)
     bt.add_argument("--test-months", type=int, default=6)
     bt.add_argument("--holdout-months", type=int, default=12)
+    bt.add_argument("--entry-study", action="store_true",
+                    help="Decision Engine : compare hors échantillon des variantes d'entrée plus fréquentes (H4 non exigé, confirmation touch) ; avec --timeframe M15 pour confirmer en M15")
+    bt.add_argument("--no-selection", action="store_true", help="études de variantes : tableau hors échantillon seulement (bien plus rapide, surtout en M15)")
     bt.add_argument("--extension-grid", help="Decision Engine : valeurs d'extension max D1 en ATR à comparer hors échantillon (ex. 3,4,6,off)")
     _store_args(bt)
     dc = sub.add_parser("decisions")
