@@ -526,6 +526,9 @@ def cmd_regime(args) -> int:
     print(f"Couverture : {macro} composante(s) macro, {inter} intermarché(s)")
     for s_ in a.subscores:
         print(f"  {s_.component:16} {'—' if not s_.available else f'{s_.score:+.2f}'}  {s_.rationale[:110]}")
+        detail = {"macro": a.macro.subscores, "entreprises": a.equity.subscores}.get(s_.component, [])
+        for d in detail:
+            print(f"    {d.component:14} {'—' if not d.available else f'{d.score:+.2f}'}  {d.rationale[:104]}")
     for o in a.overrides:
         print(f"  ! {o}")
     if args.publish:

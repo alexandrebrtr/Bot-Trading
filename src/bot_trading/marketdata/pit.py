@@ -86,8 +86,11 @@ class StorePITData:
         ticker_ciks: Mapping[str, str] | None = None,
         extra_events: Iterable[ScheduledEvent] = (),
     ) -> None:
+        from bot_trading.marketdata.universe import TOP_CIKS
+
         self.store = store
-        self.ticker_ciks = {k.upper(): str(v) for k, v in (ticker_ciks or {}).items()}
+        # Par défaut : CIK du top 10 suivi (sans eux, ``earnings`` ne renvoyait jamais rien).
+        self.ticker_ciks = {k.upper(): str(v) for k, v in (TOP_CIKS if ticker_ciks is None else ticker_ciks).items()}
         self.extra_events = list(extra_events)
         self._rows: dict[str, list[dict]] = {}
         self._datasets: set[str] | None = None
@@ -206,8 +209,18 @@ def assess_regime(store, asof: datetime, previous=None, **kw):
     from bot_trading.config import TradingMode
     from bot_trading.intelligence.regime import MarketRegimeEngine
 
-    engine = MarketRegimeEngine(StorePITData(store, **kw), mode=TradingMode.PAPER)
+    engine = _engine(store, **kw)
     return engine.assess(asof, previous)
+
+
+def _engine(store, fallback_universe=None, **kw):
+    """Market Regime Engine branché sur le store, avec l'univers « entreprises » par défaut."""
+    from bot_trading.config import TradingMode
+    from bot_trading.intelligence.regime import MarketRegimeEngine
+    from bot_trading.marketdata.universe import TOP_TICKERS
+
+    universe = list(TOP_TICKERS if fallback_universe is None else fallback_universe)
+    return MarketRegimeEngine(StorePITData(store, **kw), mode=TradingMode.PAPER, fallback_universe=universe)
 
 
 def floor_time(t: datetime, minutes: int) -> datetime:
@@ -254,7 +267,7 @@ def regime_history(
             except ValueError:
                 continue
             cached[a.asof] = a
-    engine = MarketRegimeEngine(StorePITData(store, **kw), mode=TradingMode.PAPER)
+    engine = _engine(store, **kw)
     t = start.replace(hour=hour_utc, minute=0, second=0, microsecond=0)
     if t < start:
         t += timedelta(days=1)
